@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- colina -->
+    <path android:fillColor="#FF5E8A3A" android:pathData="M18,82 C30,66 46,62 56,64 C68,66 80,70 90,82 Z" />
+    <path android:fillColor="#FF9B7E52" android:pathData="M38,76 C44,70 58,69 66,72 C70,74 72,76 72,78 L38,78 Z" />
+    <!-- base da bandeira -->
+    <path android:fillColor="#FF7A7468" android:pathData="M45,74 a7,3.5 0 1,0 14,0 a7,3.5 0 1,0 -14,0 Z" />
+    <!-- mastro -->
+    <path android:fillColor="#FF2C2A26" android:pathData="M50.5,28 L53.5,28 L53.5,74 L50.5,74 Z" />
+    <path android:fillColor="#FFF2E6C8" android:pathData="M49,27 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z" />
+    <!-- bandeira laranja -->
+    <path android:fillColor="#FFB85F12" android:pathData="M53.5,31 C60,29 66,35 76,32 L72,40 L77,48 C67,51 61,45 53.5,47 Z" />
+    <path android:fillColor="#FFF28C28" android:pathData="M53.5,30 C60,28 66,34 76,31 L72,39 L77,47 C67,50 61,44 53.5,46 Z" />
+</vector>
