@@ -43,7 +43,9 @@ Os gráficos e os sons são todos gerados por código, sem ficheiros de imagem n
 
 ## Obter o APK
 
-Cada envio (push) para o GitHub corre o workflow **Compilar APK** (`.github/workflows/build.yml`). O workflow testa a lógica do jogo, compila o APK e publica-o como artefacto `SetorZero-apk` na página da execução, em **Actions**. O artefacto é um ZIP que contém o `SetorZero.apk`.
+**Descarregar:** https://github.com/jokasman/Z/releases/latest/download/SetorZero.apk
+
+Cada envio (push) para o GitHub corre o workflow **Compilar APK** (`.github/workflows/build.yml`). O workflow testa a lógica do jogo, compila o APK e, no ramo `main`, publica-o na Release da versão atual (`versionName` do `AndroidManifest.xml`). O link acima aponta sempre para a Release mais recente e funciona sem conta no GitHub. O APK também fica como artefacto `SetorZero-apk` na página da execução, em **Actions**, mas aí só se descarrega com sessão iniciada no GitHub.
 
 Assinatura:
 

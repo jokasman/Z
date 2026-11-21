@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   apk:
@@ -59,3 +59,21 @@ jobs:
       - name: Remover chave
         if: always()
         run: rm -f release.jks
+
+      - name: Publicar na Release (link direto)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v$(grep -o 'android:versionName="[^"]*"' AndroidManifest.xml | cut -d'"' -f2)"
+          # SetorZero.apk dá um link fixo: releases/latest/download/SetorZero.apk
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" build/SetorZero.apk --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" build/SetorZero.apk \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Setor Zero $TAG" \
+              --notes "APK do Setor Zero. Para instalar, descarregue SetorZero.apk e abra-o no telemóvel (Android 8.0 ou superior)." \
+              --latest
+          fi
