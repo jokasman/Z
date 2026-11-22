@@ -221,10 +221,11 @@ public final class Level {
         }),
     };
 
-    World build(World w, int difficulty) {
+    World build(World w, int difficulty, boolean versus) {
         MapData m = new MapData(w);
         builder.build(m);
-        m.finish(playerExtra, enemyExtra, difficulty);
+        if (versus) m.finish(null, null, 1);
+        else m.finish(playerExtra, enemyExtra, difficulty);
         return w;
     }
 }

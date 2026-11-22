@@ -1,7 +1,9 @@
 package pt.setorzero.android;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -10,6 +12,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
+import pt.setorzero.core.Net;
 import pt.setorzero.core.Store;
 
 public final class MainActivity extends Activity {
@@ -27,6 +30,17 @@ public final class MainActivity extends Activity {
             @Override public void put(String key, int value) { prefs.edit().putInt(key, value).apply(); }
         };
         view = new GameView(this, sfx, store);
+        // alguns telemóveis só entregam difusões UDP (procura de jogos) com esta autorização ativa
+        final WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wifi != null) {
+            final WifiManager.MulticastLock lock = wifi.createMulticastLock("setorzero");
+            lock.setReferenceCounted(false);
+            Net.hook = new Net.Hook() {
+                @Override public void listening(boolean on) {
+                    try { if (on) lock.acquire(); else lock.release(); } catch (Exception ignored) { }
+                }
+            };
+        }
         setContentView(view);
         immersive();
     }

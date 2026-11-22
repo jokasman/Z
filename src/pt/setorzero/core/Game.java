@@ -7,10 +7,10 @@ import java.util.ArrayList;
  * (cerca de 270 píxeis de altura) que a plataforma amplia sem suavizar, para o aspeto dos anos 90.
  */
 public final class Game implements World.Listener {
-    public static final int TITLE = 0, HELP = 1, PLAY = 2, PAUSE = 3, END = 4, LEVELS = 5;
+    public static final int TITLE = 0, HELP = 1, PLAY = 2, PAUSE = 3, END = 4, LEVELS = 5, NETMENU = 6, HOSTING = 7, JOINING = 8, KEYPAD = 9;
     static final float STEP = 1f / 30f;
     static final float T = World.TILE;
-    public static final String VERSION = "0.2.0";
+    public static final String VERSION = "0.3.0";
     static final String[] DIFF = {"FÁCIL", "NORMAL", "DIFÍCIL"};
     static final float[] ZOOMS = {0.5f, 1f, 1.5f};
 
@@ -36,6 +36,15 @@ public final class Game implements World.Listener {
     private boolean sentEnd;
 
     public final ArrayList<Unit> sel = new ArrayList<>();
+    /** Equipa de quem joga neste telemóvel (o convidado em rede joga com o ciano). */
+    int me = World.PLAYER;
+    Versus vs;
+    private Net net;
+    private boolean versusPick, helloSent, netLost, connecting;
+    private int hostLevel;
+    private String ipText = "";
+    private java.util.List<String> ips;
+    private float ipsT;
     Building panel;
     private final ArrayList<Msg> msgs = new ArrayList<>();
     private final ArrayList<Btn> btns = new ArrayList<>();
@@ -66,7 +75,10 @@ public final class Game implements World.Listener {
 
     static final int B_CAMPAIGN = 1, B_HELP = 4, B_BACK = 5, B_RESUME = 6, B_RESTART = 7, B_MENU = 8, B_NEXT = 9,
         B_PAUSE = 10, B_ALL = 11, B_NONE = 12, B_CLOSE = 13, B_LEVELS = 14, B_SOUND = 15, B_MUSIC = 16, B_CRT = 17,
-        B_DIFF = 20, B_LEVEL = 40, B_MAKE = 100;
+        B_DIFF = 20, B_LEVEL = 40, B_VERSUS = 60, B_CREATE = 61, B_JOINMENU = 62, B_KEYPAD = 63, B_CONNECT = 64,
+        B_QUIT = 65, B_CANCEL = 66, B_FOUND = 70, B_KEY = 80, B_MAKE = 100;
+
+    private int them() { return 3 - me; }
 
     public Game(Sfx sfx, Store store) {
         this.sfx = sfx == null ? Sfx.NONE : sfx;
@@ -99,11 +111,22 @@ public final class Game implements World.Listener {
     }
 
     public void start(int lvl) {
+        closeNet();
+        me = World.PLAYER;
+        begin(lvl, System.nanoTime());
+    }
+
+    /** Começa uma partida (a solo, ou em rede quando vs está definido). */
+    private void begin(int lvl, long seed) {
         levelIdx = Math.max(0, Math.min(Level.ALL.length - 1, lvl));
         Level L = Level.ALL[levelIdx];
-        world = new World(System.nanoTime(), difficulty, L);
-        world.listener = this;
-        world.ais.add(new Ai(world, World.ENEMY, difficulty));
+        world = new World(seed, difficulty, L, vs != null);
+        if (vs != null) vs.attach(world, this);
+        else {
+            world.listener = this;
+            world.ais.add(new Ai(world, World.ENEMY, difficulty));
+        }
+        netLost = false;
         sel.clear();
         msgs.clear();
         panel = null;
@@ -112,13 +135,35 @@ public final class Game implements World.Listener {
         acc = 0;
         zoomIdx = 1;
         zoom = ZOOMS[zoomIdx];
-        Building f = world.forts[World.PLAYER];
-        centerOn(f.x + 3 * T, f.y - 3 * T);
+        Building f = world.forts[me];
+        float dir = me == World.PLAYER ? 1 : -1;
+        centerOn(f.x + 3 * T * dir, f.y - 3 * T * dir);
         state = PLAY;
         hintT = 14;
+        if (vs != null) {
+            brix("2 JOGADORES · " + L.name.toUpperCase());
+            brix(me == World.PLAYER ? "Tu és o LARANJA (em baixo à esquerda). Destrói o forte ciano!"
+                : "Tu és o CIANO (em cima à direita). Destrói o forte laranja!");
+            return;
+        }
         brix("NÍVEL " + (levelIdx + 1) + ": " + L.name.toUpperCase());
         brix(L.brief);
         if (levelIdx == 0) brix("Mais setores, fábricas mais rápidas. Destruam o forte ciano!");
+    }
+
+    private void closeNet() {
+        if (net != null) {
+            if (net.connected && !net.closed) net.send(Versus.simple(Versus.M_BYE, ""));
+            final Net n = net;
+            new Thread(new Runnable() { public void run() {
+                try { Thread.sleep(300); } catch (InterruptedException ignored) { }
+                n.close();
+            } }).start();
+        }
+        net = null;
+        vs = null;
+        helloSent = false;
+        connecting = false;
     }
 
     private void newDemo() {
@@ -139,7 +184,9 @@ public final class Game implements World.Listener {
             if (m.t <= 0) msgs.remove(i);
         }
         hintT -= dt;
-        if (state == TITLE || state == HELP || state == LEVELS) {
+        if (state == HOSTING || state == JOINING || state == KEYPAD) lobby();
+        if (state == TITLE || state == HELP || state == LEVELS || state == NETMENU || state == HOSTING
+            || state == JOINING || state == KEYPAD) {
             setMusic(Sfx.MUSIC_MENU);
             demo.update(dt);
             if (demo.winner >= 0 || demo.time > 600) newDemo();
@@ -152,34 +199,39 @@ public final class Game implements World.Listener {
         }
         if (world == null) return;
         setMusic(state == END ? Sfx.MUSIC_MENU : Sfx.MUSIC_BATTLE);
-        if (state == PLAY || state == END) {
+        if (vs != null) netPlay();
+        if (vs != null && !vs.host) {
+            world.clientUpdate(dt);
+        } else if (state == PLAY || state == END || (vs != null && state == PAUSE)) {
             acc += dt;
             int n = 0;
             while (acc >= STEP && n++ < 5) {
                 world.update(STEP);
+                if (vs != null) vs.tick(STEP);
                 acc -= STEP;
             }
             if (acc > STEP) acc = 0;
         }
         for (int i = sel.size() - 1; i >= 0; i--) {
             Unit u = sel.get(i);
-            if (u.alive && u.team == World.PLAYER) continue;
+            if (u.alive && u.team == me) continue;
             u.selected = false;
             sel.remove(i);
-            if (u.boardedInto != null && u.boardedInto.alive && u.boardedInto.team == World.PLAYER && !sel.contains(u.boardedInto)) {
+            if (u.boardedInto != null && u.boardedInto.alive && u.boardedInto.team == me && !sel.contains(u.boardedInto)) {
                 u.boardedInto.selected = true;
                 sel.add(u.boardedInto);
             }
         }
-        if (panel != null && panel.team != World.PLAYER) panel = null;
-        if (world.winner >= 0 && state == PLAY) {
+        if (panel != null && panel.team != me) panel = null;
+        if (vs != null && netLost && state != END) { state = END; panel = null; }
+        if (world.winner >= 0 && (state == PLAY || state == PAUSE)) {
             endT += dt;
             if (!sentEnd) {
                 sentEnd = true;
-                boolean win = world.winner == World.PLAYER;
+                boolean win = world.winner == me;
                 play(win ? Sfx.WIN : Sfx.LOSE, 1f);
-                brix(win ? "Vitória! O forte ciano caiu." : "Perdemos a base... retirada!");
-                if (win) store.put("lvl" + levelIdx, Math.max(store.get("lvl" + levelIdx, 0), difficulty + 1));
+                brix(win ? "Vitória! O forte inimigo caiu." : "Perdemos a base... retirada!");
+                if (win && vs == null) store.put("lvl" + levelIdx, Math.max(store.get("lvl" + levelIdx, 0), difficulty + 1));
             }
             if (endT > 2.5f) { state = END; panel = null; }
         }
@@ -192,14 +244,20 @@ public final class Game implements World.Listener {
                 if (panel != null) { panel = null; return true; }
                 state = PAUSE; return true;
             case PAUSE: state = PLAY; return true;
-            case HELP: case LEVELS: state = TITLE; return true;
-            case END: state = LEVELS; world = null; return true;
+            case HELP: state = TITLE; return true;
+            case LEVELS: state = versusPick ? NETMENU : TITLE; return true;
+            case NETMENU: state = TITLE; return true;
+            case HOSTING: case JOINING: closeNet(); state = NETMENU; return true;
+            case KEYPAD: closeNet(); state = JOINING; net = new Net(); net.discover(); return true;
+            case END:
+                if (vs != null) { closeNet(); state = NETMENU; } else state = LEVELS;
+                world = null; return true;
             default: return false;
         }
     }
 
     public void pause() {
-        if (state == PLAY) state = PAUSE;
+        if (state == PLAY && vs == null) state = PAUSE;
         p1 = p2 = -1;
         panning = boxing = dragging = miniDrag = false;
         setMusic(Sfx.MUSIC_NONE);
@@ -208,12 +266,37 @@ public final class Game implements World.Listener {
 
     // ---------------------------------------------------------------- mensagens e sons
 
-    @Override public void onMessage(String text, int team, boolean important) {
+    private void say(String text, boolean good, boolean important) {
         Msg m = new Msg();
         m.text = text;
-        m.color = team == World.PLAYER ? ACCENT_L : team == World.ENEMY ? 0xFF80E8F0 : TXT;
+        m.color = good ? ACCENT_L : 0xFFFF8070;
         m.t = important ? 6 : 4;
         addMsg(m);
+    }
+
+    private void info(String text) {
+        Msg m = new Msg();
+        m.text = text;
+        m.color = TXT;
+        m.t = 4;
+        addMsg(m);
+    }
+
+    @Override public void onEvent(int kind, int team, int other, String a, String b) {
+        switch (kind) {
+            case World.EV_READY: if (team == me) say(a + " pronto · " + b, true, false); break;
+            case World.EV_BOARD: if (team == me) say(a + " recuperado!", true, false); break;
+            case World.EV_FORT: if (team == me) say("O forte está a ser atacado!", false, true); break;
+            case World.EV_CAPTURE:
+                if (team == me) say("Setor capturado · " + a, true, true);
+                else if (other == me) say("Perdemos o setor " + a + "!", false, true);
+                else say("O inimigo tomou " + a, false, false);
+                break;
+            case World.EV_TURRET:
+                if (team == me) say("Perdemos o canhão de " + a, false, false);
+                else if (team == them()) say("Canhão inimigo destruído · " + a, true, false);
+                break;
+        }
     }
 
     private void brix(String text) {
@@ -230,8 +313,9 @@ public final class Game implements World.Listener {
         while (msgs.size() > 3) msgs.remove(0);
     }
 
-    @Override public void onSound(int id, float x, float y) {
+    @Override public void onSound(int id, float x, float y, int team) {
         if (state != PLAY || world == null) return;
+        if (team != 0 && team != me) return;
         float vw = sw / zoom, vh = sh / zoom;
         float m = 4 * T;
         boolean ui = id == Sfx.READY || id == Sfx.CAPTURE || id == Sfx.ALERT || id == Sfx.BOARD;
@@ -362,12 +446,12 @@ public final class Game implements World.Listener {
         Building b = null;
         for (Building o : world.buildings) if (o.contains(wx, wy, 4)) b = o;
 
-        if (u != null && u.team == World.PLAYER) {
+        if (u != null && u.team == me) {
             if (clock - lastTapT < 0.4f && lastTapType == u.type) {
                 clearSel();
                 float vw = sw / zoom, vh = sh / zoom;
                 for (Unit o : world.units)
-                    if (o.alive && o.team == World.PLAYER && o.type == u.type
+                    if (o.alive && o.team == me && o.type == u.type
                         && o.x >= camX && o.x <= camX + vw && o.y >= camY && o.y <= camY + vh) addSel(o);
             } else {
                 clearSel();
@@ -379,8 +463,8 @@ public final class Game implements World.Listener {
             return;
         }
         lastTapType = null;
-        if (u != null && u.team == World.ENEMY && !sel.isEmpty()) {
-            world.orderAttack(sel, u);
+        if (u != null && u.team == them() && !sel.isEmpty()) {
+            doAttack(sel, u);
             mark(u.x, u.y, BAD);
             return;
         }
@@ -395,37 +479,129 @@ public final class Game implements World.Listener {
             if (pilot != null) {
                 ArrayList<Unit> rest = new ArrayList<>(sel);
                 rest.remove(pilot);
-                if (!rest.isEmpty()) world.orderMove(rest, u.x, u.y + T * 1.5f, false);
-                world.orderBoard(pilot, u);
+                if (!rest.isEmpty()) doMove(rest, u.x, u.y + T * 1.5f);
+                doBoard(pilot, u);
                 mark(u.x, u.y, GOOD);
                 return;
             }
         }
         if (b != null) {
-            if (b.isFactory() && b.team == World.PLAYER) {
+            if (b.isFactory() && b.team == me) {
                 panel = b;
                 play(Sfx.CLICK, 0.6f);
                 return;
             }
-            if (b.attackable() && b.team == World.ENEMY && !sel.isEmpty()) {
-                world.orderAttack(sel, b);
+            if (b.attackable() && b.team == them() && !sel.isEmpty()) {
+                doAttack(sel, b);
                 mark(b.x, b.y, BAD);
                 return;
             }
             if (b.isFactory() && b.sector != null) {
                 if (sel.isEmpty()) {
-                    onMessage("Captura a bandeira de " + b.sector.name + " para ficares com a fábrica.", World.NEUTRAL, false);
+                    info("Captura a bandeira de " + b.sector.name + " para ficares com a fábrica.");
                 } else {
-                    world.orderMove(sel, b.sector.fx, b.sector.fy, false);
+                    doMove(sel, b.sector.fx, b.sector.fy);
                     mark(b.sector.fx, b.sector.fy, GOOD);
                 }
                 return;
             }
         }
         if (!sel.isEmpty()) {
-            world.orderMove(sel, wx, wy, false);
+            doMove(sel, wx, wy);
             mark(wx, wy, GOOD);
         }
+    }
+
+    // ---------------------------------------------------------------- rede
+
+    void joinAddress(String ip) {
+        closeNet();
+        ipText = ip;
+        net = new Net();
+        net.connect(ip);
+        connecting = true;
+        if (state != KEYPAD) state = JOINING;
+    }
+
+    void hostGame(int lvl) {
+        closeNet();
+        hostLevel = lvl;
+        net = new Net();
+        net.host(Level.ALL[lvl].name);
+        state = HOSTING;
+    }
+
+    /** Sala de espera: troca de apresentações e início da partida. */
+    private void lobby() {
+        if (net == null) return;
+        if (net.connected && !helloSent && state != HOSTING) { net.send(Versus.hello()); helloSent = true; }
+        byte[] m;
+        while (net != null && (m = net.poll()) != null) {
+            try {
+                java.io.DataInputStream in = Versus.reader(m);
+                int type = in.readByte();
+                if (state == HOSTING && type == Versus.M_HELLO) {
+                    int proto = in.readInt();
+                    String ver = in.readUTF();
+                    if (proto != Net.PROTO) {
+                        net.send(Versus.simple(Versus.M_REJECT, "Versões diferentes do jogo: " + VERSION + " e " + ver + "."));
+                        net.error = "O outro telemóvel tem a versão " + ver + ". Instalem a mesma versão.";
+                        continue;
+                    }
+                    long seed = System.nanoTime();
+                    net.send(Versus.start(hostLevel, seed));
+                    vs = new Versus(net, true);
+                    me = World.PLAYER;
+                    begin(hostLevel, seed);
+                    return;
+                } else if (type == Versus.M_START && state != HOSTING) {
+                    int lvl = in.readInt();
+                    long seed = in.readLong();
+                    vs = new Versus(net, false);
+                    me = World.ENEMY;
+                    begin(lvl, seed);
+                    return;
+                } else if (type == Versus.M_REJECT) {
+                    net.error = in.readUTF();
+                    net.close();
+                }
+            } catch (Exception ignored) {
+                // mensagem inválida
+            }
+        }
+    }
+
+    /** Durante a partida em rede: imagens de estado (convidado) ou ordens (anfitrião). */
+    private void netPlay() {
+        byte[] m;
+        int n = 0;
+        while ((m = net.poll()) != null && n++ < 60) {
+            try {
+                java.io.DataInputStream in = Versus.reader(m);
+                int type = in.readByte();
+                if (type == Versus.M_SNAP && !vs.host) vs.applySnapshot(in);
+                else if (type == Versus.M_CMD && vs.host) vs.applyCmd(in);
+                else if (type == Versus.M_BYE && world.winner < 0) netLost = true;
+            } catch (Exception ignored) {
+                // mensagem inválida
+            }
+        }
+        if (net.closed && world.winner < 0) netLost = true;
+    }
+
+    private void doMove(java.util.List<Unit> list, float x, float y) {
+        if (vs != null && !vs.host) vs.move(list, x, y);
+        else world.orderMove(list, x, y, false);
+    }
+
+    private void doAttack(java.util.List<Unit> list, Entity t) {
+        if (vs != null && !vs.host) vs.attack(list, t);
+        else world.orderAttack(list, t);
+    }
+
+    private void doBoard(Unit u, Unit v) {
+        if (vs != null && !vs.host) vs.board(u, v);
+        else world.orderBoard(u, v);
     }
 
     private void mark(float x, float y, int color) {
@@ -438,7 +614,7 @@ public final class Game implements World.Listener {
         float y0 = camY + Math.min(ay, by) / zoom, y1 = camY + Math.max(ay, by) / zoom;
         clearSel();
         for (Unit u : world.units)
-            if (u.alive && u.team == World.PLAYER && u.x + u.radius >= x0 && u.x - u.radius <= x1
+            if (u.alive && u.team == me && u.x + u.radius >= x0 && u.x - u.radius <= x1
                 && u.y + u.radius >= y0 && u.y - u.radius <= y1) addSel(u);
         if (!sel.isEmpty()) play(Sfx.CLICK, 0.6f);
     }
@@ -452,30 +628,61 @@ public final class Game implements World.Listener {
 
     private void button(int id) {
         play(Sfx.CLICK, 0.7f);
+        if (id >= B_LEVEL && id < B_LEVEL + Level.ALL.length && versusPick) { hostGame(id - B_LEVEL); return; }
         if (id >= B_LEVEL && id < B_LEVEL + Level.ALL.length) { start(id - B_LEVEL); return; }
         if (id >= B_DIFF && id < B_DIFF + 3) { difficulty = id - B_DIFF; store.put("dif", difficulty); return; }
+        if (id >= B_FOUND && id < B_FOUND + 8 && net != null) {
+            java.util.List<String[]> f = net.found();
+            if (id - B_FOUND < f.size()) { ipText = f.get(id - B_FOUND)[0]; net.connect(ipText); connecting = true; }
+            return;
+        }
+        if (id >= B_KEY && id < B_KEY + 12) {
+            int k = id - B_KEY;
+            if (k < 10 && ipText.length() < 15) ipText += k;
+            else if (k == 10 && ipText.length() < 15) ipText += ".";
+            else if (k == 11 && ipText.length() > 0) ipText = ipText.substring(0, ipText.length() - 1);
+            return;
+        }
         switch (id) {
-            case B_CAMPAIGN: case B_LEVELS: state = LEVELS; world = null; break;
+            case B_CAMPAIGN: case B_LEVELS: closeNet(); versusPick = false; state = LEVELS; world = null; break;
+            case B_VERSUS: closeNet(); state = NETMENU; world = null; break;
+            case B_CREATE: versusPick = true; state = LEVELS; break;
+            case B_JOINMENU: closeNet(); net = new Net(); net.discover(); state = JOINING; break;
+            case B_KEYPAD:
+                if (ipText.isEmpty()) {
+                    java.util.List<String> mine = Net.localAddresses();
+                    if (!mine.isEmpty()) ipText = mine.get(0).substring(0, mine.get(0).lastIndexOf('.') + 1);
+                }
+                state = KEYPAD; break;
+            case B_CONNECT:
+                if (ipText.split("\\.").length == 4) joinAddress(ipText);
+                break;
+            case B_CANCEL: closeNet(); state = NETMENU; break;
+            case B_QUIT: closeNet(); state = NETMENU; world = null; break;
             case B_HELP: state = HELP; break;
             case B_BACK: state = TITLE; break;
             case B_RESUME: state = PLAY; break;
-            case B_RESTART: start(levelIdx); break;
+            case B_RESTART: if (vs == null) start(levelIdx); break;
             case B_NEXT: start(levelIdx + 1); break;
-            case B_MENU: state = TITLE; world = null; break;
+            case B_MENU: closeNet(); state = TITLE; world = null; break;
             case B_PAUSE: state = PAUSE; break;
             case B_SOUND: store.put("som", soundOn() ? 0 : 1); break;
             case B_MUSIC: store.put("musica", musicOn() ? 0 : 1); music = -2; break;
             case B_CRT: store.put("crt", crt() ? 0 : 1); break;
             case B_ALL:
                 clearSel();
-                for (Unit u : world.units) if (u.alive && u.team == World.PLAYER) addSel(u);
+                for (Unit u : world.units) if (u.alive && u.team == me) addSel(u);
                 break;
             case B_NONE: clearSel(); break;
             case B_CLOSE: panel = null; break;
             default:
                 if (id >= B_MAKE && panel != null) {
                     UnitType t = panel.buildable()[id - B_MAKE];
-                    if (panel.making != t) { panel.making = t; panel.progress = 0; }
+                    if (panel.making != t) {
+                        if (vs != null && !vs.host) vs.produce(panel, t);
+                        panel.making = t;
+                        panel.progress = 0;
+                    }
                 }
         }
     }
@@ -589,11 +796,16 @@ public final class Game implements World.Listener {
 
     public void render(Gfx g) {
         btns.clear();
-        if (state == TITLE || state == HELP || state == LEVELS) {
+        if (state == TITLE || state == HELP || state == LEVELS || state == NETMENU || state == HOSTING
+            || state == JOINING || state == KEYPAD) {
             renderWorld(g, demo, dCamX, dCamY, 1);
             if (state == TITLE) renderTitle(g);
             else if (state == HELP) renderHelp(g);
-            else renderLevels(g);
+            else if (state == LEVELS) renderLevels(g);
+            else if (state == NETMENU) renderNetMenu(g);
+            else if (state == HOSTING) renderHosting(g);
+            else if (state == JOINING) renderJoining(g);
+            else renderKeypad(g);
             return;
         }
         if (world == null) return;
@@ -640,7 +852,8 @@ public final class Game implements World.Listener {
     private void renderHud(Gfx g) {
         bevel(g, 0, 0, sw, BAR, METAL, false);
         float x = 5, cy = BAR / 2f;
-        for (int team = 1; team <= 2; team++) {
+        for (int k = 0; k < 2; k++) {
+            int team = k == 0 ? me : them();
             int c = Draw.teamColor(team);
             g.color(SHADOW); g.fillRect(x + 1, cy - 3, 7, 7);
             g.color(c); g.fillRect(x, cy - 4, 7, 7);
@@ -664,7 +877,7 @@ public final class Game implements World.Listener {
         g.color(TXT);
         g.fillRect(pause.x + 7, pause.y + 3, 2, 7);
         g.fillRect(pause.x + 12, pause.y + 3, 2, 7);
-        float tf = world.territoryFactor(World.PLAYER) * world.prodMult[World.PLAYER];
+        float tf = world.territoryFactor(me) * world.prodMult[me];
         String prod = "PRODUÇÃO ×" + String.format("%.1f", tf);
         if (sw < 520) prod = "×" + String.format("%.1f", tf);
         textC(g, prod, pause.x - 6, cy, DIM, 1, Gfx.RIGHT);
@@ -705,6 +918,12 @@ public final class Game implements World.Listener {
             }
         }
         if (panel != null) renderPanel(g);
+        if (vs != null && !vs.host && net != null && net.silence() > 3000 && world.winner < 0 && !netLost) {
+            String t = "À ESPERA DO OUTRO TELEMÓVEL...";
+            float tw = PixelFont.width(t);
+            bevel(g, sw / 2 - tw / 2 - 8, sh / 2 - 9, tw + 16, 18, DARK, false);
+            textC(g, t, sw / 2, sh / 2, ACCENT_L, 1, Gfx.CENTER);
+        }
     }
 
     private String selSummary() {
@@ -739,8 +958,8 @@ public final class Game implements World.Listener {
         g.color(ACCENT);
         g.fillRect(x + 7, py + 1, Math.round((w - 14) * Math.min(1, panel.progress)), 4);
         if (cur != null) {
-            float left = (1 - panel.progress) * world.buildSeconds(cur, World.PLAYER);
-            boolean cap = world.unitCount(World.PLAYER) >= World.UNIT_CAP;
+            float left = (1 - panel.progress) * world.buildSeconds(cur, me);
+            boolean cap = world.unitCount(me) >= World.UNIT_CAP;
             text(g, cap ? "LIMITE DE " + World.UNIT_CAP + " UNIDADES" : "A FABRICAR: " + cur.name.toUpperCase() + " · " + (int) Math.ceil(left) + " S",
                 x + 6, py + 9, TXT, 1, Gfx.LEFT);
         }
@@ -758,12 +977,12 @@ public final class Game implements World.Listener {
             g.translate(b.x + 13, b.y + b.h / 2);
             float s = 18 / (t.radius * 2.4f);
             g.scale(s);
-            Draw.unitShape(g, t, World.PLAYER, (float) -Math.PI / 2, (float) -Math.PI / 2, on ? clock * 30 : 0, false);
+            Draw.unitShape(g, t, me, (float) -Math.PI / 2, (float) -Math.PI / 2, on ? clock * 30 : 0, false);
             g.restore();
             float tx = b.x + 26;
             text(g, t.name.toUpperCase(), tx, b.y + 5, on ? ACCENT_L : TXT, 1, Gfx.LEFT);
             text(g, t.desc, tx, b.y + 15, DIM, 1, Gfx.LEFT);
-            text(g, (int) Math.ceil(world.buildSeconds(t, World.PLAYER)) + " s", tx, b.y + 25, DIM, 1, Gfx.LEFT);
+            text(g, (int) Math.ceil(world.buildSeconds(t, me)) + " s", tx, b.y + 25, DIM, 1, Gfx.LEFT);
         }
     }
 
@@ -788,9 +1007,10 @@ public final class Game implements World.Listener {
         g.restore();
         text(g, "CAPTURA BANDEIRAS · DOMINA FÁBRICAS · DERRUBA O FORTE", cx, ty + PixelFont.CAP * sc + 8, TXT, 1, Gfx.CENTER);
 
-        float bw = 120, bh = 22, by = Math.round(sh * 0.46f);
+        float bw = 130, bh = 21, by = Math.round(sh * 0.40f);
         btn(cx - bw / 2, by, bw, bh, "CAMPANHA", B_CAMPAIGN, true, g);
-        btn(cx - bw / 2, by + bh + 6, bw, bh, "COMO JOGAR", B_HELP, false, g);
+        btn(cx - bw / 2, by + bh + 5, bw, bh, "2 JOGADORES", B_VERSUS, true, g);
+        btn(cx - bw / 2, by + 2 * (bh + 5), bw, bh, "COMO JOGAR", B_HELP, false, g);
 
         float ow = 74, oh = 16, oy = sh - oh - 6;
         float ox = sw - (ow + 4) * 3 - 2;
@@ -816,9 +1036,9 @@ public final class Game implements World.Listener {
 
     private void renderLevels(Gfx g) {
         dim(g, 0.7f);
-        text(g, "CAMPANHA", 8, 7, ACCENT, 2, Gfx.LEFT);
+        text(g, versusPick ? "2 JOGADORES: ESCOLHE O MAPA" : "CAMPANHA", 8, 7, ACCENT, 2, Gfx.LEFT);
         float dw = 50, dh = 16;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 3 && !versusPick; i++) {
             Btn b = new Btn(sw - (dw + 3) * (3 - i) - 4, 5, dw, dh, DIFF[i], B_DIFF + i, i == difficulty);
             btns.add(b);
             drawBtn(g, b);
@@ -846,14 +1066,15 @@ public final class Game implements World.Listener {
             String name = (i + 1) + ". " + L.name.toUpperCase();
             while (PixelFont.width(name) > cw - 6 && name.length() > 4) name = name.substring(0, name.length() - 2) + ".";
             text(g, name, x + 3, y + ch - 10, TXT, 1, Gfx.LEFT);
-            int done = store.get("lvl" + i, 0);
+            int done = versusPick ? 0 : store.get("lvl" + i, 0);
             for (int k = 0; k < done; k++) {
                 g.color(SHADOW); star(g, x + cw - 9 - k * 8 + 1, py + 3);
                 g.color(ACCENT_L); star(g, x + cw - 9 - k * 8, py + 2);
             }
         }
-        btn(8, sh - 22, 70, 17, "VOLTAR", B_BACK, false, g);
-        text(g, "TOCA NUM NÍVEL PARA JOGAR · ESTRELAS: DIFICULDADE VENCIDA", sw - 8, sh - 17, DIM, 1, Gfx.RIGHT);
+        btn(8, sh - 22, 70, 17, "VOLTAR", versusPick ? B_VERSUS : B_BACK, false, g);
+        text(g, versusPick ? "DEPOIS DE ESCOLHERES, O OUTRO TELEMÓVEL ENTRA NO JOGO"
+            : "TOCA NUM NÍVEL PARA JOGAR · ESTRELAS: DIFICULDADE VENCIDA", sw - 8, sh - 17, DIM, 1, Gfx.RIGHT);
     }
 
     private static void star(Gfx g, float x, float y) {
@@ -896,6 +1117,107 @@ public final class Game implements World.Listener {
         return out;
     }
 
+    private float[] box(Gfx g, float w, float h, String title) {
+        float x = Math.round((sw - w) / 2), y = Math.round((sh - h) / 2);
+        bevel(g, x, y, w, h, METAL, false);
+        rivets(g, x, y, w, h);
+        text(g, title, sw / 2, y + 7, ACCENT, 2, Gfx.CENTER);
+        return new float[]{x, y, w, h};
+    }
+
+    private float lines(Gfx g, String[] ls, float y, int color) {
+        for (String l : ls) { text(g, l, sw / 2, y, color, 1, Gfx.CENTER); y += 11; }
+        return y;
+    }
+
+    private void netError(Gfx g, float y) {
+        if (net != null && net.error != null) text(g, net.error, sw / 2, y, BAD, 1, Gfx.CENTER);
+    }
+
+    private void renderNetMenu(Gfx g) {
+        dim(g, 0.6f);
+        float[] r = box(g, Math.min(sw - 16, 380), 150, "2 JOGADORES");
+        float y = lines(g, new String[]{
+            "Dois telemóveis na mesma rede Wi-Fi, ou um ligado",
+            "ao ponto de acesso (hotspot) do outro.",
+            "Quem cria o jogo escolhe o mapa e joga com o laranja;",
+            "quem entra joga com o ciano.",
+        }, r[1] + 27, TXT);
+        float bw = 130, bh = 20;
+        btn(sw / 2 - bw - 3, y + 6, bw, bh, "CRIAR JOGO", B_CREATE, true, g);
+        btn(sw / 2 + 3, y + 6, bw, bh, "ENTRAR NUM JOGO", B_JOINMENU, true, g);
+        btn(sw / 2 - 40, y + 32, 80, 17, "VOLTAR", B_BACK, false, g);
+    }
+
+    private void renderHosting(Gfx g) {
+        dim(g, 0.6f);
+        float[] r = box(g, Math.min(sw - 16, 360), 140, "À ESPERA...");
+        if (clock - ipsT > 1.5f || ips == null) { ips = Net.localAddresses(); ipsT = clock; }
+        String dots = "...".substring(0, 1 + (int) (clock * 2) % 3);
+        float y = lines(g, new String[]{
+            "Mapa: " + Level.ALL[hostLevel].name,
+            "No outro telemóvel: 2 JOGADORES > ENTRAR NUM JOGO",
+            "À espera do outro jogador" + dots,
+        }, r[1] + 27, TXT);
+        text(g, ips.isEmpty() ? "SEM REDE: LIGA O WI-FI OU O HOTSPOT" : "O TEU ENDEREÇO: " + join(ips), sw / 2, y + 2, ACCENT_L, 1, Gfx.CENTER);
+        netError(g, y + 14);
+        btn(sw / 2 - 45, r[1] + r[3] - 26, 90, 18, "CANCELAR", B_CANCEL, false, g);
+    }
+
+    private static String join(java.util.List<String> l) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : l) { if (sb.length() > 0) sb.append(" / "); sb.append(s); }
+        return sb.toString();
+    }
+
+    private void renderJoining(Gfx g) {
+        dim(g, 0.6f);
+        float[] r = box(g, Math.min(sw - 16, 360), Math.min(sh - 16, 190), "ENTRAR NUM JOGO");
+        java.util.List<String[]> f = net == null ? new ArrayList<String[]>() : net.found();
+        float y = r[1] + 27;
+        if (net != null && net.connected) {
+            text(g, "LIGADO! A COMEÇAR...", sw / 2, y + 20, GOOD, 1, Gfx.CENTER);
+        } else if (connecting && net != null && net.error == null) {
+            text(g, "A LIGAR A " + ipText + "...", sw / 2, y + 20, DIM, 1, Gfx.CENTER);
+        } else if (f.isEmpty()) {
+            String dots = "...".substring(0, 1 + (int) (clock * 2) % 3);
+            y = lines(g, new String[]{"À procura de jogos na rede" + dots, "(o outro telemóvel tem de ter o jogo criado)"}, y, TXT);
+        } else {
+            text(g, "JOGOS ENCONTRADOS:", sw / 2, y, DIM, 1, Gfx.CENTER);
+            y += 12;
+            for (int i = 0; i < f.size() && i < 4; i++) {
+                btn(sw / 2 - 120, y, 240, 18, f.get(i)[1].toUpperCase() + " · " + f.get(i)[0], B_FOUND + i, true, g);
+                y += 22;
+            }
+        }
+        netError(g, r[1] + r[3] - 40);
+        btn(sw / 2 - 128, r[1] + r[3] - 26, 124, 18, "ESCREVER ENDEREÇO", B_KEYPAD, false, g);
+        btn(sw / 2 + 4, r[1] + r[3] - 26, 124, 18, "VOLTAR", B_VERSUS, false, g);
+    }
+
+    private void renderKeypad(Gfx g) {
+        dim(g, 0.6f);
+        float[] r = box(g, Math.min(sw - 16, 300), Math.min(sh - 10, 214), "ENDEREÇO");
+        float y = r[1] + 26;
+        bevel(g, sw / 2 - 90, y, 180, 16, DARK, true);
+        String shown = ipText + ((int) (clock * 2) % 2 == 0 ? "_" : " ");
+        textC(g, shown, sw / 2, y + 8, ACCENT_L, 1, Gfx.CENTER);
+        y += 22;
+        String[] keys = {"1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "<"};
+        int[] ids = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0, 11};
+        float kw = 40, kh = 22, gap = 4;
+        float kx = sw / 2 - (kw * 3 + gap * 2) / 2;
+        for (int i = 0; i < 12; i++) {
+            btn(kx + (i % 3) * (kw + gap), y + (i / 3) * (kh + gap), kw, kh, keys[i], B_KEY + ids[i], false, g);
+        }
+        y += 4 * (kh + gap);
+        if (net != null && net.connected) text(g, "LIGADO! A COMEÇAR...", sw / 2, y, GOOD, 1, Gfx.CENTER);
+        else if (connecting && net != null && net.error == null) text(g, "A LIGAR...", sw / 2, y, DIM, 1, Gfx.CENTER);
+        else netError(g, y);
+        btn(sw / 2 - 92, r[1] + r[3] - 24, 88, 18, "LIGAR", B_CONNECT, true, g);
+        btn(sw / 2 + 4, r[1] + r[3] - 24, 88, 18, "VOLTAR", B_JOINMENU, false, g);
+    }
+
     private void renderHelp(Gfx g) {
         dim(g, 0.82f);
         String[] lines = {
@@ -933,9 +1255,16 @@ public final class Game implements World.Listener {
         float w = 160, h = 112, x = Math.round((sw - w) / 2), y = Math.round((sh - h) / 2);
         bevel(g, x, y, w, h, METAL, false);
         rivets(g, x, y, w, h);
+        float bw = 130, bh = 18;
+        if (vs != null) {
+            text(g, "MENU", sw / 2, y + 7, ACCENT, 2, Gfx.CENTER);
+            text(g, "O JOGO CONTINUA A CORRER", sw / 2, y + 25, DIM, 1, Gfx.CENTER);
+            btn(sw / 2 - bw / 2, y + 44, bw, bh, "CONTINUAR", B_RESUME, true, g);
+            btn(sw / 2 - bw / 2, y + 70, bw, bh, "SAIR DO JOGO", B_QUIT, false, g);
+            return;
+        }
         text(g, "PAUSA", sw / 2, y + 7, ACCENT, 2, Gfx.CENTER);
         text(g, Level.ALL[levelIdx].name.toUpperCase() + " · " + DIFF[difficulty], sw / 2, y + 25, DIM, 1, Gfx.CENTER);
-        float bw = 130, bh = 18;
         btn(sw / 2 - bw / 2, y + 38, bw, bh, "CONTINUAR", B_RESUME, true, g);
         btn(sw / 2 - bw / 2, y + 60, bw, bh, "RECOMEÇAR", B_RESTART, false, g);
         btn(sw / 2 - bw / 2, y + 82, bw, bh, "NÍVEIS", B_LEVELS, false, g);
@@ -944,20 +1273,25 @@ public final class Game implements World.Listener {
     private void renderEnd(Gfx g) {
         btns.clear();
         dim(g, 0.5f);
-        boolean win = world.winner == World.PLAYER;
+        boolean win = world.winner == me;
         float w = Math.min(sw - 20, 300), h = 130, x = Math.round((sw - w) / 2), y = Math.round((sh - h) / 2);
         bevel(g, x, y, w, h, METAL, false);
         rivets(g, x, y, w, h);
-        text(g, win ? "VITÓRIA!" : "DERROTA", sw / 2, y + 8, win ? ACCENT_L : BAD, 3, Gfx.CENTER);
+        boolean lost = vs != null && netLost && world.winner < 0;
+        text(g, lost ? "LIGAÇÃO PERDIDA" : win ? "VITÓRIA!" : "DERROTA", sw / 2, y + 8, win ? ACCENT_L : BAD, lost ? 2 : 3, Gfx.CENTER);
         int secs = (int) world.time;
         String[] st = {
-            Level.ALL[levelIdx].name.toUpperCase() + " · " + DIFF[difficulty] + " · " + secs / 60 + " MIN " + secs % 60 + " S",
-            "FABRICADAS " + world.produced[1] + " · PERDIDAS " + world.lost[1] + " · ABATIDAS " + world.kills[1],
-            "BANDEIRAS " + world.captures[1] + " · SETORES NO FIM " + world.ownedSectors(1) + " DE " + world.sectors.length,
+            Level.ALL[levelIdx].name.toUpperCase() + " · " + (vs != null ? "2 JOGADORES" : DIFF[difficulty]) + " · " + secs / 60 + " MIN " + secs % 60 + " S",
+            "FABRICADAS " + world.produced[me] + " · PERDIDAS " + world.lost[me] + " · ABATIDAS " + world.kills[me],
+            "BANDEIRAS " + world.captures[me] + " · SETORES NO FIM " + world.ownedSectors(me) + " DE " + world.sectors.length,
         };
         float ty = y + 38;
         for (String s : st) { text(g, s, sw / 2, ty, TXT, 1, Gfx.CENTER); ty += 12; }
         float bw = Math.round((w - 24) / 3), bh = 20, by = y + h - bh - 8;
+        if (vs != null) {
+            btn(sw / 2 - bw / 2, by, bw, bh, "MENU", B_QUIT, true, g);
+            return;
+        }
         boolean hasNext = win && levelIdx + 1 < Level.ALL.length;
         int nb = hasNext ? 3 : 2;
         float bx = Math.round(sw / 2 - (nb * bw + (nb - 1) * 4) / 2);

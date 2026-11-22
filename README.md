@@ -57,6 +57,15 @@ São 11 níveis, todos disponíveis desde o início, com três dificuldades. Cad
 
 O adversário controlado pelo computador escolhe o que produz conforme o teu exército, defende as fábricas, ocupa veículos abandonados, disputa as bandeiras e ataca o forte quando junta tropas suficientes.
 
+### 2 jogadores
+
+Todos os níveis podem ser jogados por duas pessoas, cada uma no seu telemóvel, na mesma rede Wi-Fi ou com um telemóvel ligado ao ponto de acesso (hotspot) do outro. Não é preciso internet.
+
+1. No primeiro telemóvel: **2 JOGADORES › CRIAR JOGO** e escolher o mapa. O ecrã mostra o endereço do telemóvel.
+2. No segundo: **2 JOGADORES › ENTRAR NUM JOGO**. O jogo aparece na lista ao fim de um ou dois segundos. Se não aparecer, toca em **ESCREVER ENDEREÇO** e escreve o endereço mostrado no primeiro telemóvel.
+
+Quem cria o jogo joga com o laranja (em baixo à esquerda) e quem entra joga com o ciano (em cima à direita). Não há reforços nem bónus de nenhum dos lados. Alguns mapas (Mar de Areia, Fortaleza Gelada e Coração do Vulcão) têm edifícios a mais do lado ciano. O telemóvel que criou o jogo faz a simulação e envia o estado ao outro cerca de 15 vezes por segundo. Se esse telemóvel for para segundo plano, o jogo para nos dois. Se a ligação cair, os dois veem "LIGAÇÃO PERDIDA".
+
 ### Aspeto e som
 
 O jogo tem o aspeto dos jogos de estratégia dos anos 90: é desenhado em baixa resolução (cerca de 270 píxeis de altura) e ampliado sem suavizar. Tem letra pixelizada, painéis metálicos em relevo, sprites em 16 direções e um efeito opcional de monitor CRT. Os sons são de 8 bits e há duas músicas chiptune, uma para os menus e outra para a batalha. Som, música e efeito CRT ligam-se e desligam-se no ecrã inicial.
@@ -97,8 +106,11 @@ src/pt/setorzero/core/      lógica e desenho, sem dependências do Android
   Draw.java                 arte (terreno, edifícios, unidades, efeitos)
   Game.java                 ecrãs, câmara, toque e interface
   SoundSynth.java           síntese dos efeitos sonoros e da música (WAV)
+  Net.java                  ligação na rede local (procura por UDP, jogo por TCP)
+  Versus.java               jogo a dois: imagens de estado e ordens
 src/pt/setorzero/android/   atividade, superfície de desenho, Canvas e SoundPool
 test/SimTest.java           testes da lógica, incluindo partidas computador contra computador
+test/NetTest.java           dois jogos ligados pela rede no mesmo computador
 test/Shots.java             capturas de ecrã no computador (Java2D)
 ```
 
@@ -108,5 +120,6 @@ Testes (só precisam de Java):
 mkdir -p build/test
 javac -encoding UTF-8 -d build/test src/pt/setorzero/core/*.java test/*.java
 java -cp build/test pt.setorzero.core.SimTest
+java -Djava.awt.headless=true -cp build/test pt.setorzero.core.NetTest
 java -Djava.awt.headless=true -cp build/test pt.setorzero.core.Shots build/shots
 ```

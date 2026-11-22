@@ -12,13 +12,18 @@ public final class World {
     public static final int UNIT_CAP = 32;
     static final float LEASH = 7 * TILE;
 
+    public static final int EV_READY = 1, EV_CAPTURE = 2, EV_BOARD = 3, EV_FORT = 4, EV_TURRET = 5;
+
+    /** Acontecimentos da partida; quem os mostra decide o texto conforme a equipa de quem joga. */
     public interface Listener {
-        void onMessage(String text, int team, boolean important);
-        void onSound(int id, float x, float y);
+        void onEvent(int kind, int team, int other, String a, String b);
+        /** team: equipa a quem o som interessa (0 = todos). */
+        void onSound(int id, float x, float y, int team);
     }
 
     public final int W, H, theme;
     public final Level level;
+    public final boolean versus;
     public final byte[] terrain;
     public final boolean[] blocked;
     public final ArrayList<Unit> units = new ArrayList<>();
@@ -36,20 +41,27 @@ public final class World {
     public final float[] prodMult = {1, 1, 1};
     public final int[] produced = new int[3], lost = new int[3], kills = new int[3], captures = new int[3];
     private int nextId = 1;
-    private float fortAlertT;
+    private final float[] fortAlertT = new float[3];
+    /** Anfitrião em rede: efeitos novos a enviar ao convidado. */
+    public ArrayList<Fx> netFx;
+    private boolean recordFx = true;
     private int scorchCount;
 
     public World(long seed, int difficulty) { this(seed, difficulty, Level.ALL[0]); }
 
-    public World(long seed, int difficulty, Level level) {
+    public World(long seed, int difficulty, Level level) { this(seed, difficulty, level, false); }
+
+    /** versus: dois jogadores humanos (sem reforços nem bónus de nenhum dos lados). */
+    public World(long seed, int difficulty, Level level, boolean versus) {
         rnd = new Random(seed);
+        this.versus = versus;
         this.level = level;
         W = level.W;
         H = level.H;
         theme = level.theme;
         terrain = new byte[W * H];
         blocked = new boolean[W * H];
-        level.build(this, difficulty);
+        level.build(this, difficulty, versus);
         pf = new PathFinder(this);
     }
 
@@ -281,7 +293,7 @@ public final class World {
         updateFx(dt);
         if (winner >= 0) return;
         time += dt;
-        fortAlertT -= dt;
+        for (int i = 0; i < 3; i++) fortAlertT[i] -= dt;
         for (int i = 0; i < ais.size(); i++) ais.get(i).update(dt);
         for (int i = 0; i < buildings.size(); i++) updateBuilding(buildings.get(i), dt);
         for (int i = 0; i < units.size(); i++) {
@@ -316,10 +328,8 @@ public final class World {
                     u.angle = u.aim = (float) (b.doorUp ? -Math.PI / 2 : Math.PI / 2);
                     produced[b.team]++;
                     b.justMade = true;
-                    if (b.team == PLAYER) {
-                        msg(t.name + " pronto · " + b.sector.name, PLAYER, false);
-                        sound(Sfx.READY, b.x, b.y);
-                    }
+                    event(EV_READY, b.team, 0, t.name, b.sector.name);
+                    sound(Sfx.READY, b.x, b.y, b.team);
                 }
             }
             return;
@@ -566,7 +576,7 @@ public final class World {
             p.life -= dt;
             if (p.weapon.weapon == UnitType.W_ROCKET) {
                 p.trailT -= dt;
-                if (p.trailT <= 0) { p.trailT = 0.03f; smoke(p.x, p.y, 3.5f, 0, 0); }
+                if (p.trailT <= 0) { p.trailT = 0.03f; recordFx = false; smoke(p.x, p.y, 3.5f, 0, 0); recordFx = true; }
             }
             if (p.life <= 0) {
                 shots.remove(i);
@@ -602,10 +612,10 @@ public final class World {
         if (e instanceof Unit) {
             Unit u = (Unit) e;
             if (by != null && by.alive && by.team != u.team && (u.auto == null || !u.auto.alive)) u.auto = by;
-        } else if (e instanceof Building && ((Building) e).kind == Building.FORT && e.team == PLAYER && fortAlertT <= 0) {
-            fortAlertT = 20;
-            msg("O forte está a ser atacado!", PLAYER, true);
-            sound(Sfx.ALERT, e.x, e.y);
+        } else if (e instanceof Building && ((Building) e).kind == Building.FORT && e.team > 0 && fortAlertT[e.team] <= 0) {
+            fortAlertT[e.team] = 20;
+            event(EV_FORT, e.team, 0, null, null);
+            sound(Sfx.ALERT, e.x, e.y, e.team);
         }
         if (e.hp <= 0) kill(e, byTeam);
     }
@@ -633,7 +643,7 @@ public final class World {
             scorch(b.x, b.y, b.kind == Building.FORT ? 50 : 30);
             sound(Sfx.EXPLODE, b.x, b.y);
             if (b.kind == Building.TURRET && b.sector != null)
-                msg("Canhão destruído · " + b.sector.name, b.team == PLAYER ? PLAYER : NEUTRAL, false);
+                event(EV_TURRET, b.team, 0, b.sector.name, null);
         }
     }
 
@@ -645,10 +655,8 @@ public final class World {
         v.scan = 0;
         u.alive = false;
         u.boardedInto = v;
-        if (u.team == PLAYER) {
-            msg(v.type.name + " recuperado!", PLAYER, false);
-            sound(Sfx.BOARD, v.x, v.y);
-        }
+        event(EV_BOARD, u.team, 0, v.type.name, null);
+        sound(Sfx.BOARD, v.x, v.y, u.team);
     }
 
     // ---------------------------------------------------------------- bandeiras
@@ -691,15 +699,9 @@ public final class World {
         }
         Fx f = add(Fx.RING, s.fx, s.fy, 0.9f, 3 * TILE);
         f.color = team == PLAYER ? 0xFFF28C28 : 0xFF2EC4D6;
-        if (team == PLAYER) {
-            msg("Setor capturado · " + s.name, PLAYER, true);
-            sound(Sfx.CAPTURE, s.fx, s.fy);
-        } else if (prev == PLAYER) {
-            msg("Perdemos o setor " + s.name + "!", ENEMY, true);
-            sound(Sfx.ALERT, s.fx, s.fy);
-        } else {
-            msg("O inimigo tomou " + s.name, ENEMY, false);
-        }
+        event(EV_CAPTURE, team, prev, s.name, null);
+        sound(Sfx.CAPTURE, s.fx, s.fy, team);
+        if (prev != NEUTRAL) sound(Sfx.ALERT, s.fx, s.fy, prev);
     }
 
     private void checkWin() {
@@ -718,7 +720,10 @@ public final class World {
     Fx add(int kind, float x, float y, float life, float size) {
         Fx f = new Fx();
         f.kind = kind; f.x = x; f.y = y; f.life = life; f.size = size;
-        if (fx.size() < 700) fx.add(f);
+        if (fx.size() < 700) {
+            fx.add(f);
+            if (netFx != null && recordFx) netFx.add(f);
+        }
         return f;
     }
 
@@ -763,11 +768,49 @@ public final class World {
         }
     }
 
-    void msg(String text, int team, boolean important) {
-        if (listener != null) listener.onMessage(text, team, important);
+    void event(int kind, int team, int other, String a, String b) {
+        if (listener != null) listener.onEvent(kind, team, other, a, b);
     }
 
-    void sound(int id, float x, float y) {
-        if (listener != null) listener.onSound(id, x, y);
+    void sound(int id, float x, float y) { sound(id, x, y, 0); }
+
+    void sound(int id, float x, float y, int team) {
+        if (listener != null) listener.onSound(id, x, y, team);
+    }
+
+    /**
+     * Convidado em rede: não simula, só anima entre as imagens de estado enviadas pelo anfitrião
+     * (unidades deslizam para a última posição recebida, tiros avançam, efeitos correm).
+     */
+    public void clientUpdate(float dt) {
+        updateFx(dt);
+        time += dt;
+        float k = Math.min(1, dt * 12);
+        for (Unit u : units) {
+            float dx = u.netX - u.x, dy = u.netY - u.y;
+            if (dx * dx + dy * dy > 4 * TILE * TILE) { u.x = u.netX; u.y = u.netY; }
+            else { u.x += dx * k; u.y += dy * k; u.anim += (float) Math.sqrt(dx * dx + dy * dy) * k; }
+            u.flash -= dt;
+        }
+        for (Building b : buildings) b.flash -= dt;
+        for (Sector s : sectors) s.flashT -= dt;
+        for (int i = shots.size() - 1; i >= 0; i--) {
+            Projectile p = shots.get(i);
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.life -= dt;
+            if (p.weapon.weapon == UnitType.W_ROCKET) {
+                p.trailT -= dt;
+                if (p.trailT <= 0) { p.trailT = 0.03f; smoke(p.x, p.y, 3.5f, 0, 0); }
+            }
+            if (p.life <= 0) shots.remove(i);
+        }
+    }
+
+    Unit addUnitWithId(UnitType type, int team, float x, float y, int id) {
+        Unit u = addUnit(type, team, x, y);
+        u.id = id;
+        u.netX = x; u.netY = y;
+        return u;
     }
 }

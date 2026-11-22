@@ -25,6 +25,18 @@ public final class Shots {
         shot(g, out + "/02-niveis.png");
         g.state = Game.HELP;
         shot(g, out + "/03-ajuda.png");
+        g.state = Game.NETMENU;
+        shot(g, out + "/08-2jogadores.png");
+        g.hostGame(2);
+        for (int i = 0; i < 10; i++) g.update(1 / 30f);
+        shot(g, out + "/09-espera.png");
+        g.back();
+        g.state = Game.KEYPAD;
+        shot(g, out + "/10-endereco.png");
+        g.back();
+        shot(g, out + "/11-procurar.png");
+        g.back();
+        g.state = Game.TITLE;
 
         for (int lv = 0; lv < Level.ALL.length; lv++) {
             g.start(lv);

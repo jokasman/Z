@@ -22,9 +22,11 @@ jobs:
       - name: Testes da lógica do jogo
         run: |
           mkdir -p build/test
-          javac -encoding UTF-8 -d build/test src/pt/setorzero/core/*.java test/SimTest.java
+          javac -encoding UTF-8 -d build/test src/pt/setorzero/core/*.java test/SimTest.java test/NetTest.java test/DesktopGfx.java
           java -cp build/test pt.setorzero.core.SimTest | tee build/test/out.txt
           grep -q "ALL PASS" build/test/out.txt
+          java -Djava.awt.headless=true -cp build/test pt.setorzero.core.NetTest | tee build/test/net.txt
+          grep -q "ALL PASS" build/test/net.txt
 
       - name: Instalar Android SDK (build-tools e plataforma)
         run: |

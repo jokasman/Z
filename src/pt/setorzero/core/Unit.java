@@ -20,6 +20,7 @@ public final class Unit extends Entity {
     public UnitType crew;         // veículos: tripulante que sai quando é destruído
     public Unit boardedInto;
     public boolean selected;
+    public float netX, netY;      // convidado em rede: última posição recebida
 
     public Unit(UnitType type) {
         this.type = type;
