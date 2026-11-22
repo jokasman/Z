@@ -7,7 +7,7 @@ import java.util.Random;
 /** Estado e simulação de uma partida: terreno, setores, edifícios, unidades, tiros e efeitos. */
 public final class World {
     public static final float TILE = 32f;
-    public static final int GRASS = 0, DIRT = 1, ROCK = 2, WATER = 3, TREE = 4;
+    public static final int GRASS = 0, DIRT = 1, ROCK = 2, WATER = 3, TREE = 4, BRIDGE = 5;
     public static final int NEUTRAL = 0, PLAYER = 1, ENEMY = 2;
     public static final int UNIT_CAP = 32;
     static final float LEASH = 7 * TILE;
@@ -17,12 +17,13 @@ public final class World {
         void onSound(int id, float x, float y);
     }
 
-    public final int W = 48, H = 36;
-    public final byte[] terrain = new byte[W * H];
-    public final boolean[] blocked = new boolean[W * H];
+    public final int W, H, theme;
+    public final Level level;
+    public final byte[] terrain;
+    public final boolean[] blocked;
     public final ArrayList<Unit> units = new ArrayList<>();
     public final ArrayList<Building> buildings = new ArrayList<>();
-    public final Sector[] sectors = new Sector[9];
+    public Sector[] sectors;
     public final ArrayList<Projectile> shots = new ArrayList<>();
     public final ArrayList<Fx> fx = new ArrayList<>();
     public final ArrayList<Ai> ais = new ArrayList<>();
@@ -38,15 +39,31 @@ public final class World {
     private float fortAlertT;
     private int scorchCount;
 
-    public World(long seed, int difficulty) {
+    public World(long seed, int difficulty) { this(seed, difficulty, Level.ALL[0]); }
+
+    public World(long seed, int difficulty, Level level) {
         rnd = new Random(seed);
-        MapData.build(this, difficulty);
+        this.level = level;
+        W = level.W;
+        H = level.H;
+        theme = level.theme;
+        terrain = new byte[W * H];
+        blocked = new boolean[W * H];
+        level.build(this, difficulty);
         pf = new PathFinder(this);
     }
 
     // ---------------------------------------------------------------- terreno
 
     public int tileAt(int x, int y) { return terrain[y * W + x]; }
+
+    private int[] art;
+
+    /** Terreno em pixel art (calculado uma vez). */
+    public int[] art() {
+        if (art == null) art = TerrainArt.paint(this);
+        return art;
+    }
 
     public boolean blockedTile(int x, int y) {
         return x < 0 || y < 0 || x >= W || y >= H || blocked[y * W + x];

@@ -16,7 +16,7 @@ public final class Ai {
         this.team = team;
         this.think = difficulty == 0 ? 3f : difficulty == 1 ? 1.6f : 1f;
         this.assault = difficulty == 0 ? 14 : difficulty == 1 ? 11 : 9;
-        w.prodMult[team] = difficulty == 0 ? 0.75f : difficulty == 1 ? 1f : 1.25f;
+        w.prodMult[team] = (difficulty == 0 ? 0.75f : difficulty == 1 ? 1f : 1.25f) * (team == World.ENEMY ? w.level.enemyProd : 1f);
         t = think * 0.5f;
     }
 

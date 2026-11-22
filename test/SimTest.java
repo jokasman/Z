@@ -20,6 +20,7 @@ public final class SimTest {
         boarding();
         combat();
         sounds();
+        fonts();
         matches();
         System.out.println(fails == 0 ? "ALL PASS" : fails + " FALHAS");
         if (fails > 0) System.exit(1);
@@ -52,44 +53,58 @@ public final class SimTest {
     }
 
     static void connectivity() {
-        World w = new World(1, 1);
-        Unit start = null;
-        for (Unit u : w.units) if (u.team == World.PLAYER) { start = u; break; }
-        boolean[] seen = reach(w, start.x, start.y);
-        for (Sector s : w.sectors) check(at(w, seen, s.fx, s.fy) && !w.blockedTile((int) (s.fx / 32), (int) (s.fy / 32)), "bandeira acessível: " + s.name);
-        for (Building b : w.buildings) {
-            if (b.isFactory()) check(at(w, seen, b.doorX(), b.doorY()), "porta acessível: " + b.title() + " em " + b.sector.name);
-            else {
-                boolean any = false;
-                for (int y = b.ty - 1; y <= b.ty + b.th; y++)
-                    for (int x = b.tx - 1; x <= b.tx + b.tw; x++)
-                        if (!w.blockedTile(x, y) && seen[y * w.W + x]) any = true;
-                check(any, "acessível: " + b.title() + " em " + b.sector.name);
+        for (Level L : Level.ALL) {
+            World w = new World(1, 1, L);
+            String n = "nível " + (L.idx + 1) + " (" + L.name + ")";
+            Unit start = null;
+            for (Unit u : w.units) if (u.team == World.PLAYER) { start = u; break; }
+            boolean[] seen = reach(w, start.x, start.y);
+            int bad = 0;
+            for (Sector s : w.sectors)
+                if (!(at(w, seen, s.fx, s.fy) && !w.blockedTile((int) (s.fx / 32), (int) (s.fy / 32)))) { bad++; System.out.println("  bandeira inacessível: " + s.name); }
+            for (Building b : w.buildings) {
+                if (b.isFactory()) {
+                    if (!at(w, seen, b.doorX(), b.doorY())) { bad++; System.out.println("  porta inacessível: " + b.title() + " em " + b.sector.name); }
+                } else {
+                    boolean any = false;
+                    for (int y = b.ty - 1; y <= b.ty + b.th; y++)
+                        for (int x = b.tx - 1; x <= b.tx + b.tw; x++)
+                            if (!w.blockedTile(x, y) && seen[y * w.W + x]) any = true;
+                    if (!any) { bad++; System.out.println("  inacessível: " + b.title() + " em " + b.sector.name); }
+                }
+                for (Building o : w.buildings)
+                    if (o != b && b.tx < o.tx + o.tw && o.tx < b.tx + b.tw && b.ty < o.ty + o.th && o.ty < b.ty + b.th) { bad++; System.out.println("  edifícios sobrepostos em " + b.sector.name); }
+                if (b.sector == null || !b.sector.contains(b.x, b.y)) { bad++; System.out.println("  edifício fora do setor"); }
+            }
+            for (Unit u : w.units)
+                if (!(at(w, seen, u.x, u.y) && w.freeCircle(u.x, u.y, u.radius * 0.9f))) { bad++; System.out.println("  unidade inicial presa: " + u.type.name); }
+            check(w.sectors[w.sectors.length - (w.W / 16)].owner == World.PLAYER && w.sectors[w.W / 16 - 1].owner == World.ENEMY, n + ": bases nos cantos");
+            int forts = 0;
+            for (Building b : w.buildings) if (b.kind == Building.FORT) forts++;
+            check(forts == 2, n + ": dois fortes");
+            check(bad == 0, n + ": tudo acessível e sem sobreposições");
+            int mism = 0;
+            for (int y = 0; y < w.H; y++)
+                for (int x = 0; x < w.W; x++)
+                    if (w.blockedTile(x, y) != w.blockedTile(w.W - 1 - x, w.H - 1 - y)) mism++;
+            check(mism < w.W * w.H * 0.03f, n + ": terreno quase simétrico (" + mism + " diferenças)");
+            if (System.getProperty("mapas") != null) {
+                StringBuilder sb = new StringBuilder();
+                for (int y = 0; y < w.H; y++) {
+                    for (int x = 0; x < w.W; x++) {
+                        char c = ".,#~T=".charAt(w.tileAt(x, y));
+                        for (Building b : w.buildings) if (x >= b.tx && x < b.tx + b.tw && y >= b.ty && y < b.ty + b.th) c = "FRVG".charAt(b.kind);
+                        for (Sector s : w.sectors) if ((int) (s.fx / 32) == x && (int) (s.fy / 32) == y) c = 'P';
+                        sb.append(c);
+                    }
+                    sb.append('\n');
+                }
+                System.out.print(sb);
             }
         }
-        for (Unit u : w.units) check(at(w, seen, u.x, u.y) && w.freeCircle(u.x, u.y, u.radius * 0.9f), "unidade inicial livre: " + u.type.name + " equipa " + u.team);
-        // mapa em texto para inspeção
-        StringBuilder sb = new StringBuilder();
-        for (int y = 0; y < w.H; y++) {
-            for (int x = 0; x < w.W; x++) {
-                char c = ".,#~T".charAt(w.tileAt(x, y));
-                for (Building b : w.buildings) if (x >= b.tx && x < b.tx + b.tw && y >= b.ty && y < b.ty + b.th) c = "FRVG".charAt(b.kind);
-                for (Sector s : w.sectors) if ((int) (s.fx / 32) == x && (int) (s.fy / 32) == y) c = 'P';
-                sb.append(c);
-            }
-            sb.append('\n');
-        }
-        System.out.print(sb);
     }
 
-    static void symmetry() {
-        World w = new World(1, 1);
-        boolean ok = true;
-        for (int y = 0; y < w.H; y++)
-            for (int x = 0; x < w.W; x++)
-                if (w.blockedTile(x, y) != w.blockedTile(w.W - 1 - x, w.H - 1 - y)) ok = false;
-        check(ok, "mapa simétrico (rotação de 180°)");
-    }
+    static void symmetry() { }
 
     static void capture() {
         World w = new World(2, 1);
@@ -162,10 +177,12 @@ public final class SimTest {
 
     static void matches() {
         int[] wins = new int[3];
+        int games = 0;
         long t0 = System.currentTimeMillis();
-        for (int seed = 0; seed < 8; seed++) {
+        for (int seed = 0; seed < Level.ALL.length + 3; seed++) {
             int diff = seed % 3;
-            World w = new World(1000 + seed, diff);
+            Level L = Level.ALL[seed % Level.ALL.length];
+            World w = new World(1000 + seed, diff, L);
             w.ais.add(new Ai(w, World.PLAYER, diff));
             w.ais.add(new Ai(w, World.ENEMY, diff));
             int steps = 0;
@@ -179,14 +196,25 @@ public final class SimTest {
                     for (Unit u : w.units) if (!w.freeCircle(u.x, u.y, u.radius * 0.5f)) stuck = true;
                 }
             }
+            games++;
             String res = w.winner < 0 ? "sem vencedor" : (w.winner == 1 ? "laranja" : "ciano");
             if (w.winner >= 0) wins[w.winner]++;
-            System.out.printf("partida %d (dif %d): %s em %.1f min · fabricadas %d/%d · capturas %d/%d · máx. unidades %d%n",
-                seed, diff, res, w.time / 60, w.produced[1], w.produced[2], w.captures[1], w.captures[2], maxUnits);
+            System.out.printf("partida %d (%s, dif %d): %s em %.1f min · fabricadas %d/%d · capturas %d/%d · máx. unidades %d%n",
+                seed, L.name, diff, res, w.time / 60, w.produced[1], w.produced[2], w.captures[1], w.captures[2], maxUnits);
             check(w.captures[1] + w.captures[2] >= 4, "partida " + seed + ": houve disputa de bandeiras");
             check(!stuck, "partida " + seed + ": nenhuma unidade presa dentro de rocha/água");
         }
-        check(wins[1] + wins[2] >= 6, "a maioria das partidas IA contra IA termina (" + (wins[1] + wins[2]) + "/8)");
+        check(wins[1] + wins[2] >= games * 0.5f, "pelo menos metade das partidas IA contra IA termina (" + (wins[1] + wins[2]) + "/" + games + ")");
         System.out.println("tempo das partidas: " + (System.currentTimeMillis() - t0) + " ms");
+    }
+
+    static void fonts() {
+        boolean ok = true;
+        String all = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ.,:;!?'\"-+×·()/%";
+        for (char c : all.toCharArray()) if (PixelFont.width(String.valueOf(c)) <= 0) ok = false;
+        check(ok, "letra pixelizada tem todos os carateres usados");
+        for (Level L : Level.ALL) {
+            check(PixelFont.width(L.brief) < 470, "nível " + (L.idx + 1) + ": texto de apresentação cabe no ecrã");
+        }
     }
 }

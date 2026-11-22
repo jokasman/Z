@@ -5,7 +5,6 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
-import android.graphics.Typeface;
 
 import java.util.HashMap;
 
@@ -15,23 +14,22 @@ import pt.setorzero.core.Gfx;
 final class AndroidGfx implements Gfx {
     private Canvas c;
     private int col = 0xFFFFFFFF;
-    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint bmp = new Paint(Paint.FILTER_BITMAP_FLAG);
-    private final Paint.FontMetrics fm = new Paint.FontMetrics();
+    // sem suavização: o jogo é desenhado em píxeis grandes
+    private final Paint fill = new Paint();
+    private final Paint stroke = new Paint();
+    private final Paint bmp = new Paint();
     private final Path path = new Path();
     private final RectF rf = new RectF();
     private final HashMap<String, Bitmap> cache;
 
     AndroidGfx() { this(new HashMap<String, Bitmap>()); }
 
-    private AndroidGfx(HashMap<String, Bitmap> cache) {
+    AndroidGfx(HashMap<String, Bitmap> cache) {
         this.cache = cache;
         fill.setStyle(Paint.Style.FILL);
         stroke.setStyle(Paint.Style.STROKE);
-        stroke.setStrokeCap(Paint.Cap.ROUND);
-        stroke.setStrokeJoin(Paint.Join.ROUND);
+        stroke.setStrokeCap(Paint.Cap.SQUARE);
+        bmp.setFilterBitmap(false);
     }
 
     void set(Canvas c) { this.c = c; }
@@ -80,22 +78,6 @@ final class AndroidGfx implements Gfx {
         c.drawPath(path, f());
     }
 
-    private Paint t(float size, boolean bold, int align) {
-        text.setColor(col);
-        text.setTextSize(size);
-        text.setTypeface(bold ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-        text.setTextAlign(align == CENTER ? Paint.Align.CENTER : align == RIGHT ? Paint.Align.RIGHT : Paint.Align.LEFT);
-        return text;
-    }
-
-    @Override public void text(String str, float x, float y, float size, int align, boolean bold) {
-        Paint p = t(size, bold, align);
-        p.getFontMetrics(fm);
-        c.drawText(str, x, y - (fm.ascent + fm.descent) / 2, p);
-    }
-
-    @Override public float textWidth(String str, float size, boolean bold) { return t(size, bold, LEFT).measureText(str); }
-
     @Override public void save() { c.save(); }
 
     @Override public void restore() { c.restore(); }
@@ -108,17 +90,11 @@ final class AndroidGfx implements Gfx {
 
     @Override public void clip(float x, float y, float w, float h) { c.clipRect(x, y, x + w, y + h); }
 
-    @Override public void cached(String key, int w, int h, float scale, boolean opaque, Painter p,
-                                 float dx, float dy, float dw, float dh) {
+    @Override public void image(String key, int w, int h, PixelSource src, float dx, float dy, float dw, float dh) {
         Bitmap b = cache.get(key);
         if (b == null) {
-            b = Bitmap.createBitmap((int) Math.ceil(w * scale), (int) Math.ceil(h * scale),
-                opaque ? Bitmap.Config.RGB_565 : Bitmap.Config.ARGB_8888);
-            Canvas cc = new Canvas(b);
-            cc.scale(scale, scale);
-            AndroidGfx sub = new AndroidGfx(cache);
-            sub.set(cc);
-            p.paint(sub);
+            if (cache.size() > 10) cache.clear();
+            b = Bitmap.createBitmap(src.pixels(), w, h, Bitmap.Config.ARGB_8888);
             cache.put(key, b);
         }
         rf.set(dx, dy, dx + dw, dy + dh);

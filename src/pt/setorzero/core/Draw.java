@@ -35,164 +35,12 @@ public final class Draw {
 
     // ---------------------------------------------------------------- terreno
 
-    /** Preenche como uma só mancha todas as quadrículas de um tipo, com cantos exteriores arredondados. */
-    private static void mass(Gfx g, World w, int code, float grow, float rad, float ox, float oy) {
-        for (int y = 0; y < w.H; y++) {
-            for (int x = 0; x < w.W; x++) {
-                if (w.tileAt(x, y) != code) continue;
-                float px = x * T + ox, py = y * T + oy;
-                g.fillRoundRect(px - grow, py - grow, T + grow * 2, T + grow * 2, rad);
-                boolean r = x + 1 < w.W && w.tileAt(x + 1, y) == code;
-                boolean d = y + 1 < w.H && w.tileAt(x, y + 1) == code;
-                if (r) g.fillRect(px + T / 2, py - grow, T, T + grow * 2);
-                if (d) g.fillRect(px - grow, py + T / 2, T + grow * 2, T);
-                if (r && d && w.tileAt(x + 1, y + 1) == code) g.fillRect(px + T / 2, py + T / 2, T, T);
-            }
-        }
-    }
-
-    private static boolean is(World w, int x, int y, int code) {
-        return x >= 0 && y >= 0 && x < w.W && y < w.H && w.tileAt(x, y) == code;
-    }
-
-    public static void paintTerrain(Gfx g, World w) {
-        int W = w.W, H = w.H;
-        // relva com variação suave
-        for (int y = 0; y < H; y++) {
-            for (int x = 0; x < W; x++) {
-                float v = rnd01(x / 2, y / 2, 1) * 0.6f + rnd01(x, y, 1) * 0.4f;
-                g.color(shade(0xFF5E8A3A, 0.95f + v * 0.08f));
-                g.fillRect(x * T, y * T, T + 0.5f, T + 0.5f);
-            }
-        }
-        // terra batida
-        g.color(0xFF8E7349);
-        mass(g, w, World.DIRT, 3, 14, 0, 0);
-        g.color(0xFF9B7E52);
-        mass(g, w, World.DIRT, -1, 12, 0, 0);
-        // tufos de erva e pedrinhas
-        for (int y = 0; y < H; y++) {
-            for (int x = 0; x < W; x++) {
-                int c = w.tileAt(x, y);
-                if (c != World.GRASS && c != World.DIRT) continue;
-                for (int k = 0; k < 3; k++) {
-                    float px = (x + rnd01(x, y, 10 + k)) * T, py = (y + rnd01(x, y, 20 + k)) * T;
-                    if (c == World.GRASS) {
-                        g.color(rnd01(x, y, 30 + k) > 0.5f ? 0x55A8D06A : 0x40254A18);
-                        g.fillOval(px, py, 2.2f, 1.4f);
-                    } else {
-                        g.color(rnd01(x, y, 30 + k) > 0.5f ? 0x55705430 : 0x40C8AE80);
-                        g.fillCircle(px, py, 1.4f + rnd01(x, y, 40 + k));
-                    }
-                }
-            }
-        }
-        // água: margem de areia, água funda e reflexos
-        g.color(0xFFC9B47E);
-        mass(g, w, World.WATER, 6, 16, 0, 0);
-        g.color(0xFF2B6390);
-        mass(g, w, World.WATER, 1, 14, 0, 0);
-        g.color(0xFF3477A8);
-        mass(g, w, World.WATER, -5, 10, 0, 0);
-        for (int y = 0; y < H; y++) {
-            for (int x = 0; x < W; x++) {
-                if (w.tileAt(x, y) != World.WATER) continue;
-                g.color(0x55A8D8F0);
-                float rx = (x + 0.2f + rnd01(x, y, 5) * 0.6f) * T, ry = (y + 0.2f + rnd01(x, y, 6) * 0.6f) * T;
-                g.line(rx - 5, ry, rx + 5, ry, 1.2f);
-                g.line(rx - 2, ry + 4, rx + 3, ry + 4, 1f);
-            }
-        }
-        // rocha: sombra, massa, relevo
-        g.color(0x50000000);
-        mass(g, w, World.ROCK, 1, 12, 5, 6);
-        g.color(0xFF55544F);
-        mass(g, w, World.ROCK, 1, 12, 0, 0);
-        g.color(0xFF6E6C66);
-        mass(g, w, World.ROCK, -3, 10, -1, -2);
-        for (int y = 0; y < H; y++) {
-            for (int x = 0; x < W; x++) {
-                if (w.tileAt(x, y) != World.ROCK) continue;
-                float x0 = x * T, y0 = y * T;
-                if (!is(w, x, y - 1, World.ROCK)) {
-                    g.color(0x40FFFFFF);
-                    g.fillRoundRect(x0 + 2, y0 + 1, T - 4, 4, 2);
-                }
-                for (int k = 0; k < 2; k++) {
-                    float cx = x0 + (0.25f + rnd01(x, y, 50 + k) * 0.5f) * T, cy = y0 + (0.25f + rnd01(x, y, 60 + k) * 0.5f) * T;
-                    float r = T * (0.14f + rnd01(x, y, 70 + k) * 0.12f);
-                    int n = 6;
-                    for (int i = 0; i < n; i++) {
-                        double a = i * Math.PI * 2 / n + rnd01(x, y, 80 + k) * 2;
-                        float rr = r * (0.75f + rnd01(x, y, 90 + i + k * 7) * 0.5f);
-                        POLY[i * 2] = cx + (float) Math.cos(a) * rr;
-                        POLY[i * 2 + 1] = cy + (float) Math.sin(a) * rr;
-                    }
-                    g.color(0x40000000);
-                    for (int i = 0; i < n; i++) { POLY[i * 2] += 2; POLY[i * 2 + 1] += 2; }
-                    g.fillPoly(POLY, n);
-                    for (int i = 0; i < n; i++) { POLY[i * 2] -= 2; POLY[i * 2 + 1] -= 2; }
-                    g.color(shade(0xFF8C8A82, 0.92f + rnd01(x, y, 99 + k) * 0.15f));
-                    g.fillPoly(POLY, n);
-                }
-                g.color(0x50302E2A);
-                float v = rnd01(x, y, 3);
-                g.line(x0 + 5 + v * 8, y0 + T * 0.7f, x0 + 15 + v * 10, y0 + T * 0.6f + v * 6, 1.3f);
-            }
-        }
-        // árvores
-        for (int pass = 0; pass < 3; pass++) {
-            for (int y = 0; y < H; y++) {
-                for (int x = 0; x < W; x++) {
-                    if (w.tileAt(x, y) != World.TREE) continue;
-                    float v = rnd01(x, y, 4);
-                    float cx = (x + 0.35f + v * 0.3f) * T, cy = (y + 0.35f + rnd01(x, y, 8) * 0.3f) * T;
-                    if (pass == 0) { g.color(0x66000000); g.fillCircle(cx + 6, cy + 7, T * 0.6f); }
-                    else if (pass == 1) { g.color(shade(0xFF2E5A22, 0.9f + v * 0.2f)); g.fillCircle(cx, cy, T * 0.62f); }
-                    else {
-                        g.color(shade(0xFF3F7A2C, 0.95f + v * 0.15f));
-                        g.fillCircle(cx - 4, cy - 4, T * 0.4f);
-                        g.color(0x40B8E08A);
-                        g.fillCircle(cx - 7, cy - 8, T * 0.16f);
-                    }
-                }
-            }
-        }
-        // limites dos setores (tracejado)
-        g.color(0x40FFFFFF);
-        for (int c = 1; c < 3; c++) {
-            float x = c * 16 * T;
-            for (float y = T; y < (H - 1) * T; y += 18) g.line(x, y, x, y + 9, 1.5f);
-        }
-        for (int r = 1; r < 3; r++) {
-            float y = r * 12 * T;
-            for (float x = T; x < (W - 1) * T; x += 18) g.line(x, y, x + 9, y, 1.5f);
-        }
-    }
-
-    public static void paintMini(Gfx g, World w) {
-        for (int y = 0; y < w.H; y++) {
-            for (int x = 0; x < w.W; x++) {
-                int c;
-                switch (w.tileAt(x, y)) {
-                    case World.DIRT: c = 0xFF8C7450; break;
-                    case World.ROCK: c = 0xFF5E5D59; break;
-                    case World.WATER: c = 0xFF2F6A9A; break;
-                    case World.TREE: c = 0xFF2E5A22; break;
-                    default: c = 0xFF4E7A30;
-                }
-                g.color(c);
-                g.fillRect(x * 4, y * 4, 4, 4);
-            }
-        }
-    }
-
     // ---------------------------------------------------------------- mundo
 
     /** Desenha o mundo visto pela câmara (o chamador aplica a transformação). */
-    public static void world(Gfx g, World w, float vx0, float vy0, float vx1, float vy1, float time, float cacheScale) {
-        g.cached("terrain", (int) (w.W * T), (int) (w.H * T), cacheScale, true, new Gfx.Painter() {
-            public void paint(Gfx gg) { paintTerrain(gg, w); }
+    public static void world(Gfx g, World w, float vx0, float vy0, float vx1, float vy1, float time) {
+        g.image("terrain-" + w.level.idx, w.W * TerrainArt.TX, w.H * TerrainArt.TX, new Gfx.PixelSource() {
+            public int[] pixels() { return w.art(); }
         }, 0, 0, w.W * T, w.H * T);
 
         for (Sector s : w.sectors) {
@@ -446,7 +294,7 @@ public final class Draw {
         g.strokeCircle(cx, cy, r * 0.62f, 3);
         g.save();
         g.translate(cx, cy);
-        g.rotate(b.aim);
+        g.rotate(q(b.aim));
         g.color(0xFF2E3135);
         g.fillRect(4, -5.5f, r * 1.15f, 3.6f);
         g.fillRect(4, 2, r * 1.15f, 3.6f);
@@ -497,7 +345,7 @@ public final class Draw {
         float cx = b.x, cy = b.y;
         g.save();
         g.translate(cx, cy);
-        g.rotate(b.aim);
+        g.rotate(q(b.aim));
         g.color(0xFF2E3135);
         g.fillRect(6, -2.5f, 24, 5);
         g.restore();
@@ -515,7 +363,12 @@ public final class Draw {
     // ---------------------------------------------------------------- unidades
 
     /** Desenha uma unidade centrada em (0, 0). Usado no mapa e nos ícones do painel. */
+    /** Ângulos em 16 direções, como os sprites antigos. */
+    static float q(float a) { return (float) (Math.round(a / (Math.PI / 8)) * (Math.PI / 8)); }
+
     public static void unitShape(Gfx g, UnitType t, int team, float angle, float aim, float anim, boolean hit) {
+        angle = q(angle);
+        aim = q(aim);
         int c = teamColor(team);
         int dk = shade(c, 0.5f);
         float r = t.radius;
@@ -627,8 +480,8 @@ public final class Draw {
                                float camX, float camY, float viewW, float viewH) {
         g.color(0xCC101214);
         g.fillRoundRect(x - 4, y - 4, mw + 8, mh + 8, 6);
-        g.cached("mini", w.W * 4, w.H * 4, 1, true, new Gfx.Painter() {
-            public void paint(Gfx gg) { paintMini(gg, w); }
+        g.image("mini-" + w.level.idx, w.W * 4, w.H * 4, new Gfx.PixelSource() {
+            public int[] pixels() { return TerrainArt.mini(w.art(), w); }
         }, x, y, mw, mh);
         float sx = mw / (w.W * T), sy = mh / (w.H * T);
         for (Sector s : w.sectors) {

@@ -1,6 +1,7 @@
 package pt.setorzero.android;
 
 import android.app.Activity;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -8,6 +9,8 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+
+import pt.setorzero.core.Store;
 
 public final class MainActivity extends Activity {
     private GameView view;
@@ -18,7 +21,12 @@ public final class MainActivity extends Activity {
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         sfx = new AndroidSfx(this);
-        view = new GameView(this, sfx);
+        final SharedPreferences prefs = getSharedPreferences("setorzero", MODE_PRIVATE);
+        Store store = new Store() {
+            @Override public int get(String key, int def) { return prefs.getInt(key, def); }
+            @Override public void put(String key, int value) { prefs.edit().putInt(key, value).apply(); }
+        };
+        view = new GameView(this, sfx, store);
         setContentView(view);
         immersive();
     }

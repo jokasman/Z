@@ -37,9 +37,31 @@ Requer Android 8.0 ou superior. Joga-se com o telemóvel deitado e não tem anú
 | Jipe | O mais rápido, ideal para capturar bandeiras longe |
 | Tanque | Lento, muito resistente, canhão com dano em área |
 
-Há três níveis de dificuldade. O adversário controlado pelo computador escolhe o que produz conforme o teu exército, defende as fábricas, ocupa veículos abandonados, disputa as bandeiras e ataca o forte quando junta tropas suficientes.
+### Campanha
 
-Os gráficos e os sons são todos gerados por código, sem ficheiros de imagem nem de áudio.
+São 11 níveis, todos disponíveis desde o início, com três dificuldades. Cada nível vencido ganha uma estrela por dificuldade.
+
+| # | Nível | Cenário | Particularidade |
+|---|---|---|---|
+| 1 | Vale das Bandeiras | Prados | Mapa de introdução |
+| 2 | Dunas de Ferro | Deserto | Mapa aberto, tanques abandonados |
+| 3 | Rio Partido | Prados | Rio com três pontes |
+| 4 | Passo Gelado | Neve | Montanhas com poucas passagens |
+| 5 | Arquipélago | Prados | Ilhas ligadas por pontes estreitas |
+| 6 | Cratera | Vulcão | Rios de lava e uma cratera central |
+| 7 | Cidade Fantasma | Cidade | Ruas entre ruínas e um canal |
+| 8 | Floresta Negra | Prados | Floresta cerrada com trilhos |
+| 9 | Mar de Areia | Deserto | Mapa grande, inimigo com fábrica extra |
+| 10 | Fortaleza Gelada | Neve | Base inimiga cheia de canhões |
+| 11 | Coração do Vulcão | Vulcão | Batalha final, inimigo reforçado |
+
+O adversário controlado pelo computador escolhe o que produz conforme o teu exército, defende as fábricas, ocupa veículos abandonados, disputa as bandeiras e ataca o forte quando junta tropas suficientes.
+
+### Aspeto e som
+
+O jogo tem o aspeto dos jogos de estratégia dos anos 90: é desenhado em baixa resolução (cerca de 270 píxeis de altura) e ampliado sem suavizar. Tem letra pixelizada, painéis metálicos em relevo, sprites em 16 direções e um efeito opcional de monitor CRT. Os sons são de 8 bits e há duas músicas chiptune, uma para os menus e outra para a batalha. Som, música e efeito CRT ligam-se e desligam-se no ecrã inicial.
+
+Os gráficos, os sons e a música são todos gerados por código, sem ficheiros de imagem nem de áudio.
 
 ## Obter o APK
 
@@ -66,12 +88,15 @@ Para compilar localmente, com o Android SDK em `ANDROID_HOME`: `KS_PASS=... bash
 ```
 src/pt/setorzero/core/      lógica e desenho, sem dependências do Android
   World.java                simulação: movimento, combate, captura, produção
-  MapData.java              mapa de 9 setores, simétrico
+  Level.java                os 11 níveis da campanha
+  MapData.java              ferramentas para construir mapas simétricos
+  TerrainArt.java           terreno em pixel art, com 5 cenários
+  PixelFont.java            letra pixelizada com acentos
   PathFinder.java           A* com alisamento do caminho
   Ai.java                   adversário controlado pelo computador
   Draw.java                 arte (terreno, edifícios, unidades, efeitos)
   Game.java                 ecrãs, câmara, toque e interface
-  SoundSynth.java           síntese dos efeitos sonoros (WAV)
+  SoundSynth.java           síntese dos efeitos sonoros e da música (WAV)
 src/pt/setorzero/android/   atividade, superfície de desenho, Canvas e SoundPool
 test/SimTest.java           testes da lógica, incluindo partidas computador contra computador
 test/Shots.java             capturas de ecrã no computador (Java2D)

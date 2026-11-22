@@ -2,24 +2,36 @@ package pt.setorzero.core;
 
 import java.util.ArrayList;
 
-/** Ecrãs, câmara, controlos por toque e interface do jogo. Independente do Android. */
+/**
+ * Ecrãs, câmara, controlos por toque e interface. Tudo é desenhado numa resolução baixa
+ * (cerca de 270 píxeis de altura) que a plataforma amplia sem suavizar, para o aspeto dos anos 90.
+ */
 public final class Game implements World.Listener {
-    public static final int TITLE = 0, HELP = 1, PLAY = 2, PAUSE = 3, END = 4;
+    public static final int TITLE = 0, HELP = 1, PLAY = 2, PAUSE = 3, END = 4, LEVELS = 5;
     static final float STEP = 1f / 30f;
     static final float T = World.TILE;
-    static final String VERSION = "0.1.0";
-    static final String[] DIFF = {"Fácil", "Normal", "Difícil"};
+    public static final String VERSION = "0.2.0";
+    static final String[] DIFF = {"FÁCIL", "NORMAL", "DIFÍCIL"};
+    static final float[] ZOOMS = {0.5f, 1f, 1.5f};
+
+    // paleta da interface
+    static final int METAL = 0xFF4E5564, METAL_L = 0xFF8A93A6, METAL_D = 0xFF22252C, DARK = 0xFF16181E,
+        TXT = 0xFFF0ECD8, DIM = 0xFFA4ACB8, ACCENT = 0xFFF0A020, ACCENT_L = 0xFFFFD860, GOOD = 0xFF70E060, BAD = 0xFFF05040,
+        SHADOW = 0xFF000000;
 
     public int state = TITLE;
     public World world;
     private World demo;
-    private int difficulty = 1;
+    private int difficulty;
+    private int levelIdx;
     private final Sfx sfx;
-    public float cacheScale = 2f;
+    private final Store store;
+    private int music = -2;
 
-    private float sw = 960, sh = 540, dp = 1;
+    private float sw = 480, sh = 270;
     float camX, camY, zoom = 1;
-    private float dCamX, dCamY, dZoom = 1, dDir = 1;
+    private int zoomIdx = 1;
+    private float dCamX, dCamY, dDir = 1;
     private float clock, acc, endT;
     private boolean sentEnd;
 
@@ -29,76 +41,88 @@ public final class Game implements World.Listener {
     private final ArrayList<Btn> btns = new ArrayList<>();
     private final float[] soundT = new float[Sfx.COUNT];
 
-    // toque
     private int p1 = -1, p2 = -1;
     private float p1x, p1y, p2x, p2y, downX, downY;
     private boolean dragging, boxing, panning, miniDrag;
-    private float pinchD, pinchZ, pinchWx, pinchWy;
+    private float pinchD, pinchWx, pinchWy;
+    private int pinchZoomIdx;
     private float lastTapT = -10;
     private UnitType lastTapType;
     private float markX, markY, markT = -10;
     private int markColor;
     private float hintT;
+    private int pressed = -1;
 
-    static final class Msg {
-        String text; int color; float t; boolean brix;
-    }
+    static final class Msg { String text; int color; float t; boolean brix; }
 
     static final class Btn {
         final float x, y, w, h; final String label; final int id; final boolean primary;
         Btn(float x, float y, float w, float h, String label, int id, boolean primary) {
-            this.x = x; this.y = y; this.w = w; this.h = h; this.label = label; this.id = id; this.primary = primary;
+            this.x = Math.round(x); this.y = Math.round(y); this.w = Math.round(w); this.h = Math.round(h);
+            this.label = label; this.id = id; this.primary = primary;
         }
-        boolean hit(float px, float py) { return px >= x && px <= x + w && py >= y && py <= y + h; }
+        boolean hit(float px, float py) { return px >= x - 2 && px <= x + w + 2 && py >= y - 2 && py <= y + h + 2; }
     }
 
-    // ids dos botões
-    static final int B_EASY = 1, B_NORMAL = 2, B_HARD = 3, B_HELP = 4, B_BACK = 5, B_RESUME = 6, B_RESTART = 7,
-        B_MENU = 8, B_AGAIN = 9, B_PAUSE = 10, B_ALL = 11, B_NONE = 12, B_CLOSE = 13, B_MAKE = 100;
+    static final int B_CAMPAIGN = 1, B_HELP = 4, B_BACK = 5, B_RESUME = 6, B_RESTART = 7, B_MENU = 8, B_NEXT = 9,
+        B_PAUSE = 10, B_ALL = 11, B_NONE = 12, B_CLOSE = 13, B_LEVELS = 14, B_SOUND = 15, B_MUSIC = 16, B_CRT = 17,
+        B_DIFF = 20, B_LEVEL = 40, B_MAKE = 100;
 
-    public Game(Sfx sfx) {
+    public Game(Sfx sfx, Store store) {
         this.sfx = sfx == null ? Sfx.NONE : sfx;
+        this.store = store == null ? new Store.Memory() : store;
+        difficulty = this.store.get("dif", 1);
         newDemo();
+    }
+
+    public Game(Sfx sfx) { this(sfx, null); }
+
+    public boolean crt() { return store.get("crt", 1) == 1; }
+
+    private boolean soundOn() { return store.get("som", 1) == 1; }
+
+    private boolean musicOn() { return store.get("musica", 1) == 1; }
+
+    private void play(int id, float vol) { if (soundOn()) sfx.play(id, vol); }
+
+    private void setMusic(int track) {
+        int t = musicOn() ? track : Sfx.MUSIC_NONE;
+        if (t != music) { music = t; sfx.music(t); }
     }
 
     // ---------------------------------------------------------------- ciclo
 
+    /** Tamanho da superfície virtual (em píxeis grandes). */
     public void resize(float w, float h, float density) {
-        sw = w; sh = h; dp = density;
+        sw = w; sh = h;
         if (world != null) clampCam();
-        dZoom = Math.max(sh / (14 * T), 0.6f * dp);
     }
 
-    public void start(int diff) {
-        difficulty = diff;
-        world = new World(System.nanoTime(), diff);
+    public void start(int lvl) {
+        levelIdx = Math.max(0, Math.min(Level.ALL.length - 1, lvl));
+        Level L = Level.ALL[levelIdx];
+        world = new World(System.nanoTime(), difficulty, L);
         world.listener = this;
-        world.ais.add(new Ai(world, World.ENEMY, diff));
+        world.ais.add(new Ai(world, World.ENEMY, difficulty));
         sel.clear();
         msgs.clear();
         panel = null;
         sentEnd = false;
         endT = 0;
         acc = 0;
-        zoom = defaultZoom();
+        zoomIdx = 1;
+        zoom = ZOOMS[zoomIdx];
         Building f = world.forts[World.PLAYER];
         centerOn(f.x + 3 * T, f.y - 3 * T);
         state = PLAY;
         hintT = 14;
-        brix("Comandante Brix: capturem as bandeiras! Mais setores, fábricas mais rápidas.");
-        brix("Destruam o forte ciano no canto oposto do mapa.");
-    }
-
-    private float defaultZoom() { return clampZoom(38 * dp / T); }
-
-    private float clampZoom(float z) {
-        float min = Math.max(sw / (world != null ? world.W * T : 1536), sh / (40 * T)) * 0.98f;
-        min = Math.min(min, 26 * dp / T);
-        return Math.max(min, Math.min(z, 80 * dp / T));
+        brix("NÍVEL " + (levelIdx + 1) + ": " + L.name.toUpperCase());
+        brix(L.brief);
+        if (levelIdx == 0) brix("Mais setores, fábricas mais rápidas. Destruam o forte ciano!");
     }
 
     private void newDemo() {
-        demo = new World(System.nanoTime(), 1);
+        demo = new World(System.nanoTime(), 1, Level.ALL[0]);
         demo.ais.add(new Ai(demo, World.PLAYER, 1));
         demo.ais.add(new Ai(demo, World.ENEMY, 1));
         dCamX = 2 * T;
@@ -115,17 +139,19 @@ public final class Game implements World.Listener {
             if (m.t <= 0) msgs.remove(i);
         }
         hintT -= dt;
-        if (state == TITLE || state == HELP) {
+        if (state == TITLE || state == HELP || state == LEVELS) {
+            setMusic(Sfx.MUSIC_MENU);
             demo.update(dt);
             if (demo.winner >= 0 || demo.time > 600) newDemo();
-            float vw = sw / dZoom;
-            dCamX += dDir * 14 * dt;
+            float vw = sw;
+            dCamX += dDir * 10 * dt;
             if (dCamX > demo.W * T - vw) dDir = -1;
             if (dCamX < 0) dDir = 1;
-            dCamY = (demo.H * T - sh / dZoom) * 0.5f + (float) Math.sin(clock * 0.07f) * 4 * T;
+            dCamY = (demo.H * T - sh) * 0.5f + (float) Math.sin(clock * 0.07f) * 3 * T;
             return;
         }
         if (world == null) return;
+        setMusic(state == END ? Sfx.MUSIC_MENU : Sfx.MUSIC_BATTLE);
         if (state == PLAY || state == END) {
             acc += dt;
             int n = 0;
@@ -151,8 +177,9 @@ public final class Game implements World.Listener {
             if (!sentEnd) {
                 sentEnd = true;
                 boolean win = world.winner == World.PLAYER;
-                sfx.play(win ? Sfx.WIN : Sfx.LOSE, 1f);
-                brix(win ? "Comandante Brix: vitória! O forte ciano caiu." : "Comandante Brix: perdemos a base... retirada!");
+                play(win ? Sfx.WIN : Sfx.LOSE, 1f);
+                brix(win ? "Vitória! O forte ciano caiu." : "Perdemos a base... retirada!");
+                if (win) store.put("lvl" + levelIdx, Math.max(store.get("lvl" + levelIdx, 0), difficulty + 1));
             }
             if (endT > 2.5f) { state = END; panel = null; }
         }
@@ -165,17 +192,18 @@ public final class Game implements World.Listener {
                 if (panel != null) { panel = null; return true; }
                 state = PAUSE; return true;
             case PAUSE: state = PLAY; return true;
-            case HELP: state = TITLE; return true;
-            case END: state = TITLE; world = null; return true;
+            case HELP: case LEVELS: state = TITLE; return true;
+            case END: state = LEVELS; world = null; return true;
             default: return false;
         }
     }
 
-    /** A aplicação foi para segundo plano. */
     public void pause() {
         if (state == PLAY) state = PAUSE;
         p1 = p2 = -1;
         panning = boxing = dragging = miniDrag = false;
+        setMusic(Sfx.MUSIC_NONE);
+        music = -2;
     }
 
     // ---------------------------------------------------------------- mensagens e sons
@@ -183,7 +211,7 @@ public final class Game implements World.Listener {
     @Override public void onMessage(String text, int team, boolean important) {
         Msg m = new Msg();
         m.text = text;
-        m.color = team == World.PLAYER ? 0xFFFFC27A : team == World.ENEMY ? 0xFF8FE6F0 : 0xFFE8E8E8;
+        m.color = team == World.PLAYER ? ACCENT_L : team == World.ENEMY ? 0xFF80E8F0 : TXT;
         m.t = important ? 6 : 4;
         addMsg(m);
     }
@@ -191,7 +219,7 @@ public final class Game implements World.Listener {
     private void brix(String text) {
         Msg m = new Msg();
         m.text = text;
-        m.color = 0xFFFFFFFF;
+        m.color = TXT;
         m.t = 7;
         m.brix = true;
         addMsg(m);
@@ -199,7 +227,7 @@ public final class Game implements World.Listener {
 
     private void addMsg(Msg m) {
         msgs.add(m);
-        while (msgs.size() > 4) msgs.remove(0);
+        while (msgs.size() > 3) msgs.remove(0);
     }
 
     @Override public void onSound(int id, float x, float y) {
@@ -213,7 +241,7 @@ public final class Game implements World.Listener {
         float gap = id == Sfx.MG || id == Sfx.SHOT ? 0.07f : id == Sfx.EXPLODE ? 0.09f : 0.04f;
         if (soundT[id] > 0) return;
         soundT[id] = gap;
-        sfx.play(id, ui || inView ? 0.9f : 0.35f);
+        play(id, ui || inView ? 0.9f : 0.35f);
     }
 
     // ---------------------------------------------------------------- câmara
@@ -227,7 +255,7 @@ public final class Game implements World.Listener {
     private void clampCam() {
         float vw = sw / zoom, vh = sh / zoom;
         float mw = world.W * T, mh = world.H * T;
-        float top = 40 * dp / zoom;
+        float top = 16 / zoom;
         if (vw >= mw) camX = (mw - vw) / 2;
         else camX = Math.max(0, Math.min(camX, mw - vw));
         if (vh >= mh + top) camY = (mh - vh) / 2 - top / 2;
@@ -241,14 +269,17 @@ public final class Game implements World.Listener {
             p1 = id; p1x = x; p1y = y;
             downX = x; downY = y;
             dragging = boxing = miniDrag = false;
-            if (state == PLAY && inMinimap(x, y)) { miniDrag = true; miniJump(x, y); }
+            pressed = -1;
+            for (int i = btns.size() - 1; i >= 0; i--) if (btns.get(i).hit(x, y)) { pressed = btns.get(i).id; break; }
+            if (state == PLAY && pressed < 0 && inMinimap(x, y)) { miniDrag = true; miniJump(x, y); }
         } else if (p2 == -1 && state == PLAY) {
             p2 = id; p2x = x; p2y = y;
             panning = true;
             boxing = false;
             miniDrag = false;
-            pinchD = Math.max(10, World.dist(p1x, p1y, p2x, p2y));
-            pinchZ = zoom;
+            pressed = -1;
+            pinchD = Math.max(4, World.dist(p1x, p1y, p2x, p2y));
+            pinchZoomIdx = zoomIdx;
             float mx = (p1x + p2x) / 2, my = (p1y + p2y) / 2;
             pinchWx = camX + mx / zoom;
             pinchWy = camY + my / zoom;
@@ -260,8 +291,13 @@ public final class Game implements World.Listener {
         else if (id == p2) { p2x = x; p2y = y; }
         else return;
         if (panning && p1 != -1 && p2 != -1) {
-            float d = Math.max(10, World.dist(p1x, p1y, p2x, p2y));
-            zoom = clampZoom(pinchZ * d / pinchD);
+            float d = Math.max(4, World.dist(p1x, p1y, p2x, p2y));
+            float want = ZOOMS[pinchZoomIdx] * d / pinchD;
+            int best = 0;
+            for (int i = 1; i < ZOOMS.length; i++)
+                if (Math.abs(Math.log(ZOOMS[i] / want)) < Math.abs(Math.log(ZOOMS[best] / want))) best = i;
+            zoomIdx = best;
+            zoom = ZOOMS[best];
             float mx = (p1x + p2x) / 2, my = (p1y + p2y) / 2;
             camX = pinchWx - mx / zoom;
             camY = pinchWy - my / zoom;
@@ -270,8 +306,9 @@ public final class Game implements World.Listener {
         }
         if (id != p1 || panning) return;
         if (miniDrag) { miniJump(x, y); return; }
-        if (!dragging && World.dist(downX, downY, x, y) > 12 * dp) {
+        if (!dragging && World.dist(downX, downY, x, y) > 5) {
             dragging = true;
+            pressed = -1;
             if (state == PLAY && !overHud(downX, downY)) boxing = true;
         }
     }
@@ -287,6 +324,7 @@ public final class Game implements World.Listener {
             p1 = -1;
             if (p2 != -1) { p1 = p2; p1x = p2x; p1y = p2y; p2 = -1; }
             boxing = dragging = miniDrag = false;
+            pressed = -1;
         }
         if (p1 == -1 && p2 == -1) panning = false;
     }
@@ -294,6 +332,7 @@ public final class Game implements World.Listener {
     public void pointerCancel() {
         p1 = p2 = -1;
         panning = boxing = dragging = miniDrag = false;
+        pressed = -1;
     }
 
     private void tap(float x, float y) {
@@ -312,7 +351,7 @@ public final class Game implements World.Listener {
     }
 
     private void worldTap(float wx, float wy) {
-        float tol = 18 * dp / zoom;
+        float tol = 9 / zoom;
         Unit u = null;
         float bd = Float.MAX_VALUE;
         for (Unit o : world.units) {
@@ -336,13 +375,13 @@ public final class Game implements World.Listener {
             }
             lastTapT = clock;
             lastTapType = u.type;
-            sfx.play(Sfx.CLICK, 0.6f);
+            play(Sfx.CLICK, 0.6f);
             return;
         }
         lastTapType = null;
         if (u != null && u.team == World.ENEMY && !sel.isEmpty()) {
             world.orderAttack(sel, u);
-            mark(u.x, u.y, 0xFFFF5040);
+            mark(u.x, u.y, BAD);
             return;
         }
         if (u != null && u.team == World.NEUTRAL && !sel.isEmpty()) {
@@ -358,40 +397,40 @@ public final class Game implements World.Listener {
                 rest.remove(pilot);
                 if (!rest.isEmpty()) world.orderMove(rest, u.x, u.y + T * 1.5f, false);
                 world.orderBoard(pilot, u);
-                mark(u.x, u.y, 0xFF7CFC6A);
+                mark(u.x, u.y, GOOD);
                 return;
             }
         }
         if (b != null) {
             if (b.isFactory() && b.team == World.PLAYER) {
                 panel = b;
-                sfx.play(Sfx.CLICK, 0.6f);
+                play(Sfx.CLICK, 0.6f);
                 return;
             }
             if (b.attackable() && b.team == World.ENEMY && !sel.isEmpty()) {
                 world.orderAttack(sel, b);
-                mark(b.x, b.y, 0xFFFF5040);
+                mark(b.x, b.y, BAD);
                 return;
             }
             if (b.isFactory() && b.sector != null) {
                 if (sel.isEmpty()) {
-                    onMessage("Captura a bandeira de " + b.sector.name + " para ficares com esta fábrica.", World.NEUTRAL, false);
+                    onMessage("Captura a bandeira de " + b.sector.name + " para ficares com a fábrica.", World.NEUTRAL, false);
                 } else {
                     world.orderMove(sel, b.sector.fx, b.sector.fy, false);
-                    mark(b.sector.fx, b.sector.fy, 0xFF7CFC6A);
+                    mark(b.sector.fx, b.sector.fy, GOOD);
                 }
                 return;
             }
         }
         if (!sel.isEmpty()) {
             world.orderMove(sel, wx, wy, false);
-            mark(wx, wy, 0xFF7CFC6A);
+            mark(wx, wy, GOOD);
         }
     }
 
     private void mark(float x, float y, int color) {
         markX = x; markY = y; markT = clock; markColor = color;
-        sfx.play(Sfx.CLICK, 0.5f);
+        play(Sfx.CLICK, 0.5f);
     }
 
     private void boxSelect(float ax, float ay, float bx, float by) {
@@ -401,7 +440,7 @@ public final class Game implements World.Listener {
         for (Unit u : world.units)
             if (u.alive && u.team == World.PLAYER && u.x + u.radius >= x0 && u.x - u.radius <= x1
                 && u.y + u.radius >= y0 && u.y - u.radius <= y1) addSel(u);
-        if (!sel.isEmpty()) sfx.play(Sfx.CLICK, 0.6f);
+        if (!sel.isEmpty()) play(Sfx.CLICK, 0.6f);
     }
 
     private void addSel(Unit u) { if (!u.selected) { u.selected = true; sel.add(u); } }
@@ -412,17 +451,21 @@ public final class Game implements World.Listener {
     }
 
     private void button(int id) {
-        sfx.play(Sfx.CLICK, 0.7f);
+        play(Sfx.CLICK, 0.7f);
+        if (id >= B_LEVEL && id < B_LEVEL + Level.ALL.length) { start(id - B_LEVEL); return; }
+        if (id >= B_DIFF && id < B_DIFF + 3) { difficulty = id - B_DIFF; store.put("dif", difficulty); return; }
         switch (id) {
-            case B_EASY: start(0); break;
-            case B_NORMAL: start(1); break;
-            case B_HARD: start(2); break;
+            case B_CAMPAIGN: case B_LEVELS: state = LEVELS; world = null; break;
             case B_HELP: state = HELP; break;
             case B_BACK: state = TITLE; break;
             case B_RESUME: state = PLAY; break;
-            case B_RESTART: case B_AGAIN: start(difficulty); break;
+            case B_RESTART: start(levelIdx); break;
+            case B_NEXT: start(levelIdx + 1); break;
             case B_MENU: state = TITLE; world = null; break;
             case B_PAUSE: state = PAUSE; break;
+            case B_SOUND: store.put("som", soundOn() ? 0 : 1); break;
+            case B_MUSIC: store.put("musica", musicOn() ? 0 : 1); music = -2; break;
+            case B_CRT: store.put("crt", crt() ? 0 : 1); break;
             case B_ALL:
                 clearSel();
                 for (Unit u : world.units) if (u.alive && u.team == World.PLAYER) addSel(u);
@@ -439,17 +482,18 @@ public final class Game implements World.Listener {
 
     // ---------------------------------------------------------------- layout
 
-    private float barH() { return 38 * dp; }
+    static final int BAR = 15;
 
     private float[] miniRect() {
-        float mw = Math.min(170 * dp, sw * 0.26f);
-        float mh = mw * 36 / 48f;
-        return new float[]{sw - mw - 10 * dp, sh - mh - 10 * dp, mw, mh};
+        float mw = Math.min(sw * 0.24f, world.W * 2), mh = mw * world.H / world.W;
+        if (mh > sh * 0.36f) { mh = sh * 0.36f; mw = mh * world.W / world.H; }
+        mw = Math.round(mw); mh = Math.round(mh);
+        return new float[]{sw - mw - 5, sh - mh - 5, mw, mh};
     }
 
     private boolean inMinimap(float x, float y) {
         float[] r = miniRect();
-        return x >= r[0] - 6 * dp && x <= r[0] + r[2] + 6 * dp && y >= r[1] - 6 * dp && y <= r[1] + r[3] + 6 * dp;
+        return x >= r[0] - 3 && x <= r[0] + r[2] + 3 && y >= r[1] - 3 && y <= r[1] + r[3] + 3;
     }
 
     private void miniJump(float x, float y) {
@@ -459,46 +503,122 @@ public final class Game implements World.Listener {
     }
 
     private boolean overHud(float x, float y) {
-        if (y < barH()) return true;
+        if (y < BAR) return true;
         if (inMinimap(x, y)) return true;
         for (Btn b : btns) if (b.hit(x, y)) return true;
         return false;
     }
 
     private float[] panelRect() {
-        float w = Math.min(sw - 20 * dp, 520 * dp), h = 150 * dp;
-        return new float[]{(sw - w) / 2, sh - h - 8 * dp, w, h};
+        float w = Math.min(sw - 12, 300), h = 86;
+        return new float[]{Math.round((sw - w) / 2), Math.round(sh - h - 4), Math.round(w), h};
+    }
+
+    // ---------------------------------------------------------------- primitivas da interface
+
+    static void text(Gfx g, String s, float x, float y, int color, int scale, int align) {
+        float w = PixelFont.width(s, scale);
+        float ox = align == Gfx.CENTER ? -w / 2 : align == Gfx.RIGHT ? -w : 0;
+        PixelFont.drawTop(g, s, Math.round(x + ox), Math.round(y), scale, color, SHADOW);
+    }
+
+    /** Texto centrado verticalmente em cy. */
+    static void textC(Gfx g, String s, float x, float cy, int color, int scale, int align) {
+        text(g, s, x, Math.round(cy - PixelFont.CAP * scale / 2f), color, scale, align);
+    }
+
+    /** Painel metálico em relevo (luz em cima à esquerda). */
+    static void bevel(Gfx g, float x, float y, float w, float h, int base, boolean sunken) {
+        x = Math.round(x); y = Math.round(y); w = Math.round(w); h = Math.round(h);
+        g.color(SHADOW);
+        g.fillRect(x - 1, y - 1, w + 2, h + 2);
+        g.color(base);
+        g.fillRect(x, y, w, h);
+        int lt = Draw.shade(base, 1.45f), dk = Draw.shade(base, 0.5f);
+        g.color(sunken ? dk : lt);
+        g.fillRect(x, y, w, 1);
+        g.fillRect(x, y, 1, h);
+        g.color(sunken ? lt : dk);
+        g.fillRect(x, y + h - 1, w, 1);
+        g.fillRect(x + w - 1, y, 1, h);
+    }
+
+    private static void rivets(Gfx g, float x, float y, float w, float h) {
+        g.color(METAL_L);
+        float[][] p = {{x + 2, y + 2}, {x + w - 3, y + 2}, {x + 2, y + h - 3}, {x + w - 3, y + h - 3}};
+        for (float[] q : p) { g.fillRect(Math.round(q[0]), Math.round(q[1]), 1, 1); }
+    }
+
+    private void drawBtn(Gfx g, Btn b) {
+        boolean down = pressed == b.id;
+        int base = b.primary ? 0xFFB86A14 : METAL;
+        bevel(g, b.x, b.y, b.w, b.h, base, down);
+        int c = b.primary ? 0xFFFFF0C0 : TXT;
+        textC(g, b.label, b.x + b.w / 2 + (down ? 1 : 0), b.y + b.h / 2 + (down ? 1 : 0), c, 1, Gfx.CENTER);
+    }
+
+    private Btn btn(float x, float y, float w, float h, String label, int id, boolean primary, Gfx g) {
+        Btn b = new Btn(x, y, w, h, label, id, primary);
+        btns.add(b);
+        drawBtn(g, b);
+        return b;
+    }
+
+    private void dim(Gfx g, float a) {
+        g.color(Draw.alpha(0xFF0A0C10, a));
+        g.fillRect(0, 0, sw, sh);
+        // trama de pontos, como os ecrãs de pausa antigos
+        g.color(Draw.alpha(0xFF000000, a * 0.5f));
+        for (int y = 0; y < sh; y += 2) g.fillRect(0, y, sw, 1);
+    }
+
+    private static void flagIcon(Gfx g, float x, float y, int c) {
+        g.color(SHADOW); g.fillRect(x + 1, y, 1, 7);
+        g.color(0xFFD0D0D0); g.fillRect(x, y, 1, 7);
+        g.color(c); g.fillRect(x + 1, y, 4, 3);
+    }
+
+    private static void unitIcon(Gfx g, float x, float y, int c) {
+        g.color(SHADOW); g.fillRect(x + 1, y + 1, 5, 6);
+        g.color(c); g.fillRect(x, y, 5, 6);
+        g.color(0xFF101010); g.fillRect(x + 1, y + 2, 3, 1);
+        g.color(0xFFFFFFFF); g.fillRect(x + 3, y + 2, 1, 1);
     }
 
     // ---------------------------------------------------------------- desenho
 
     public void render(Gfx g) {
         btns.clear();
-        if (state == TITLE || state == HELP) {
-            renderWorld(g, demo, dCamX, dCamY, dZoom);
-            if (state == TITLE) renderTitle(g); else renderHelp(g);
+        if (state == TITLE || state == HELP || state == LEVELS) {
+            renderWorld(g, demo, dCamX, dCamY, 1);
+            if (state == TITLE) renderTitle(g);
+            else if (state == HELP) renderHelp(g);
+            else renderLevels(g);
             return;
         }
         if (world == null) return;
         renderWorld(g, world, camX, camY, zoom);
         g.save();
+        float cx = Math.round(camX * zoom) / zoom, cy = Math.round(camY * zoom) / zoom;
         g.scale(zoom);
-        g.translate(-camX, -camY);
+        g.translate(-cx, -cy);
         float since = clock - markT;
         if (since < 0.6f) {
             float p = since / 0.6f;
-            g.color(Draw.alpha(markColor, 1 - p));
-            g.strokeOval(markX, markY, 14 * (1 - p * 0.6f), 10 * (1 - p * 0.6f), 2.2f);
-            g.strokeOval(markX, markY, 5, 3.5f, 1.6f);
+            g.color(markColor);
+            float r = 12 * (1 - p * 0.6f);
+            g.fillRect(markX - r, markY - 1, 4, 2);
+            g.fillRect(markX + r - 4, markY - 1, 4, 2);
+            g.fillRect(markX - 1, markY - r, 2, 4);
+            g.fillRect(markX - 1, markY + r - 4, 2, 4);
         }
         g.restore();
         if (boxing && p1 != -1) {
-            float x0 = Math.min(downX, p1x), y0 = Math.min(downY, p1y);
-            float bw = Math.abs(p1x - downX), bh = Math.abs(p1y - downY);
-            g.color(0x2A7CFC6A);
-            g.fillRect(x0, y0, bw, bh);
-            g.color(0xCC7CFC6A);
-            g.strokeRect(x0, y0, bw, bh, 1.5f * dp);
+            float x0 = Math.round(Math.min(downX, p1x)), y0 = Math.round(Math.min(downY, p1y));
+            float bw = Math.round(Math.abs(p1x - downX)), bh = Math.round(Math.abs(p1y - downY));
+            g.color(GOOD);
+            for (float x = x0; x < x0 + bw; x += 4) { g.fillRect(x, y0, 2, 1); g.fillRect(x, y0 + bh, 2, 1); }
+            for (float y = y0; y < y0 + bh; y += 4) { g.fillRect(x0, y, 1, 2); g.fillRect(x0 + bw, y, 1, 2); }
         }
         renderHud(g);
         if (state == PAUSE) renderPause(g);
@@ -506,91 +626,83 @@ public final class Game implements World.Listener {
     }
 
     private void renderWorld(Gfx g, World w, float cx, float cy, float z) {
-        g.color(0xFF2A2C24);
+        g.color(0xFF101208);
         g.fillRect(0, 0, sw, sh);
+        cx = Math.round(cx * z) / z;
+        cy = Math.round(cy * z) / z;
         g.save();
         g.scale(z);
         g.translate(-cx, -cy);
-        Draw.world(g, w, cx, cy, cx + sw / z, cy + sh / z, clock, cacheScale);
+        Draw.world(g, w, cx, cy, cx + sw / z, cy + sh / z, clock);
         g.restore();
     }
 
     private void renderHud(Gfx g) {
-        float bh = barH();
-        g.color(0xC0101214);
-        g.fillRect(0, 0, sw, bh);
-        float ts = (sw / dp < 720 ? 12.5f : 14) * dp;
-        float x = 12 * dp;
-        x = teamStat(g, x, bh / 2, World.PLAYER, "Tu", ts);
-        x += 14 * dp;
-        x = teamStat(g, x, bh / 2, World.ENEMY, "Inimigo", ts);
+        bevel(g, 0, 0, sw, BAR, METAL, false);
+        float x = 5, cy = BAR / 2f;
+        for (int team = 1; team <= 2; team++) {
+            int c = Draw.teamColor(team);
+            g.color(SHADOW); g.fillRect(x + 1, cy - 3, 7, 7);
+            g.color(c); g.fillRect(x, cy - 4, 7, 7);
+            x += 11;
+            flagIcon(g, x, cy - 3.5f, c);
+            x += 8;
+            String s = String.valueOf(world.ownedSectors(team));
+            textC(g, s, x, cy, TXT, 1, Gfx.LEFT);
+            x += PixelFont.width(s) + 6;
+            unitIcon(g, x, cy - 3.5f, c);
+            x += 8;
+            s = String.valueOf(world.unitCount(team));
+            textC(g, s, x, cy, TXT, 1, Gfx.LEFT);
+            x += PixelFont.width(s) + 14;
+        }
         int secs = (int) world.time;
-        g.color(0xFFE8E8E8);
-        g.text(String.format("%d:%02d", secs / 60, secs % 60), x + 18 * dp, bh / 2, ts, Gfx.LEFT, true);
-        // pausa
-        float pb = bh - 8 * dp;
-        Btn pause = new Btn(sw - pb - 6 * dp, 4 * dp, pb, pb, "", B_PAUSE, false);
+        textC(g, String.format("%d:%02d", secs / 60, secs % 60), x, cy, ACCENT_L, 1, Gfx.LEFT);
+        Btn pause = new Btn(sw - 22, 1, 21, BAR - 2, "", B_PAUSE, false);
         btns.add(pause);
-        g.color(0x30FFFFFF);
-        g.fillRoundRect(pause.x, pause.y, pause.w, pause.h, 6 * dp);
-        g.color(0xFFFFFFFF);
-        g.fillRect(pause.x + pb * 0.33f, pause.y + pb * 0.28f, pb * 0.12f, pb * 0.44f);
-        g.fillRect(pause.x + pb * 0.55f, pause.y + pb * 0.28f, pb * 0.12f, pb * 0.44f);
-        // território
+        bevel(g, pause.x, pause.y, pause.w, pause.h, pressed == B_PAUSE ? METAL_D : 0xFF666E80, pressed == B_PAUSE);
+        g.color(TXT);
+        g.fillRect(pause.x + 7, pause.y + 3, 2, 7);
+        g.fillRect(pause.x + 12, pause.y + 3, 2, 7);
         float tf = world.territoryFactor(World.PLAYER) * world.prodMult[World.PLAYER];
-        g.color(0xFFBFC4C9);
-        g.text((sw / dp < 720 ? "×" : "Produção ×") + String.format("%.1f", tf), pause.x - 10 * dp, bh / 2, 12 * dp, Gfx.RIGHT, false);
+        String prod = "PRODUÇÃO ×" + String.format("%.1f", tf);
+        if (sw < 520) prod = "×" + String.format("%.1f", tf);
+        textC(g, prod, pause.x - 6, cy, DIM, 1, Gfx.RIGHT);
 
         // mensagens
-        float my = bh + 8 * dp;
-        for (Msg m : state == PLAY ? msgs : new ArrayList<Msg>()) {
-            float a = Math.min(1, m.t);
-            float size = 13 * dp;
-            float tw = g.textWidth(m.text, size, true);
-            float extra = m.brix ? 30 * dp : 0;
-            float mw = tw + 20 * dp + extra, mh = 24 * dp;
-            float mx = (sw - mw) / 2;
-            g.color(Draw.alpha(0xFF101214, 0.75f * a));
-            g.fillRoundRect(mx, my, mw, mh, 6 * dp);
-            if (m.brix) Draw.brix(g, mx + 16 * dp, my + mh / 2 + dp, 20 * dp, clock);
-            g.color(Draw.alpha(m.color, a));
-            g.text(m.text, mx + 10 * dp + extra, my + mh / 2, size, Gfx.LEFT, true);
-            my += mh + 4 * dp;
+        float my = BAR + 4;
+        if (state == PLAY) for (Msg m : msgs) {
+            float tw = PixelFont.width(m.text);
+            float extra = m.brix ? 16 : 0;
+            float mw = tw + 10 + extra, mh = m.brix ? 16 : 12;
+            if ((m.t % 0.5f) < 0.25f && m.t > 6.5f) continue; // pisca ao chegar
+            float mx = Math.round((sw - mw) / 2);
+            bevel(g, mx, my, mw, mh, DARK, true);
+            if (m.brix) Draw.brix(g, mx + 8, my + mh / 2, 12, clock);
+            textC(g, m.text, mx + 5 + extra, my + mh / 2, m.color, 1, Gfx.LEFT);
+            my += mh + 3;
         }
 
-        // minimapa
         float[] r = miniRect();
+        bevel(g, r[0] - 3, r[1] - 3, r[2] + 6, r[3] + 6, METAL, false);
         Draw.minimap(g, world, r[0], r[1], r[2], r[3], camX, camY, sw / zoom, sh / zoom);
 
-        // botões de seleção
-        float bw = 84 * dp, bhh = 40 * dp, by = sh - bhh - 10 * dp;
-        Btn all = new Btn(10 * dp, by, bw, bhh, "Todos", B_ALL, false);
-        Btn none = new Btn(10 * dp + bw + 8 * dp, by, bw, bhh, "Nenhum", B_NONE, false);
+        float bw = 48, bh = 20, by = sh - bh - 5;
         if (panel == null) {
-            drawBtn(g, all);
-            drawBtn(g, none);
-            btns.add(all);
-            btns.add(none);
-            if (!sel.isEmpty()) {
-                g.color(0xFF7CFC6A);
-                g.text(selSummary(), 12 * dp, by - 14 * dp, 13 * dp, Gfx.LEFT, true);
-            }
+            btn(5, by, bw, bh, "TODOS", B_ALL, false, g);
+            btn(5 + bw + 4, by, bw, bh, "NENHUM", B_NONE, false, g);
+            if (!sel.isEmpty()) text(g, selSummary(), 6, by - 11, GOOD, 1, Gfx.LEFT);
         }
-        if (hintT > 0 && panel == null) {
-            float a = Math.min(1, hintT);
-            String h = "Arrasta para selecionar · toca no chão para mover · dois dedos movem e aproximam a câmara";
-            float size = 12 * dp;
-            float tw = g.textWidth(h, size, false);
-            if (tw > miniRect()[0] - 30 * dp) {
-                h = "Arrastar: selecionar · tocar: mover · dois dedos: câmara";
-                tw = g.textWidth(h, size, false);
+        if (hintT > 0 && panel == null && state == PLAY) {
+            String h = "ARRASTA: SELECIONAR · TOCA: MOVER · 2 DEDOS: CÂMARA E ZOOM";
+            float tw = PixelFont.width(h);
+            if (tw > r[0] - 20) { h = "ARRASTA: SELECIONAR · 2 DEDOS: CÂMARA"; tw = PixelFont.width(h); }
+            float hx = Math.round(Math.max(tw / 2 + 6, Math.min(sw / 2, r[0] - 8 - tw / 2)));
+            float hy = sh - 52;
+            if ((int) (clock * 2) % 2 == 0 || hintT < 10) {
+                bevel(g, hx - tw / 2 - 5, hy - 6, tw + 10, 12, DARK, true);
+                textC(g, h, hx, hy, ACCENT_L, 1, Gfx.CENTER);
             }
-            float hy = sh - 110 * dp;
-            float hx = Math.max(tw / 2 + 12 * dp, Math.min(sw / 2, miniRect()[0] - 14 * dp - tw / 2));
-            g.color(Draw.alpha(0xFF101214, 0.7f * a));
-            g.fillRoundRect(hx - tw / 2 - 10 * dp, hy - 13 * dp, tw + 20 * dp, 26 * dp, 6 * dp);
-            g.color(Draw.alpha(0xFFFFFFFF, a));
-            g.text(h, hx, hy, size, Gfx.CENTER, false);
         }
         if (panel != null) renderPanel(g);
     }
@@ -602,214 +714,255 @@ public final class Game implements World.Listener {
         for (UnitType t : UnitType.ALL) {
             if (n[t.id] == 0) continue;
             if (sb.length() > 0) sb.append(" · ");
-            sb.append(n[t.id]).append(' ').append(t.name);
+            sb.append(n[t.id]).append(' ').append(t.name.toUpperCase());
         }
         return sb.toString();
-    }
-
-    private float teamStat(Gfx g, float x, float cy, int team, String label, float ts) {
-        int c = Draw.teamColor(team);
-        g.color(c);
-        g.fillRoundRect(x, cy - 7 * dp, 14 * dp, 14 * dp, 3 * dp);
-        x += 20 * dp;
-        int ns = world.ownedSectors(team);
-        String s = label + ": " + ns + (ns == 1 ? " setor · " : " setores · ") + world.unitCount(team) + " unid.";
-        g.color(0xFFF2F2F2);
-        g.text(s, x, cy, ts, Gfx.LEFT, true);
-        return x + g.textWidth(s, ts, true);
     }
 
     private void renderPanel(Gfx g) {
         float[] r = panelRect();
         float x = r[0], y = r[1], w = r[2], h = r[3];
-        g.color(0xF0151719);
-        g.fillRoundRect(x, y, w, h, 10 * dp);
-        g.color(Draw.C_PLAYER);
-        g.strokeRoundRect(x, y, w, h, 10 * dp, 1.5f * dp);
-        g.color(0xFFFFFFFF);
-        g.text(panel.title() + " · " + panel.sector.name, x + 14 * dp, y + 18 * dp, 14 * dp, Gfx.LEFT, true);
-        Btn close = new Btn(x + w - 44 * dp, y + 2 * dp, 42 * dp, 34 * dp, "", B_CLOSE, false);
+        bevel(g, x, y, w, h, METAL, false);
+        rivets(g, x, y, w, h);
+        text(g, (panel.title() + " · " + panel.sector.name).toUpperCase(), x + 6, y + 5, ACCENT_L, 1, Gfx.LEFT);
+        Btn close = new Btn(x + w - 17, y + 3, 14, 12, "", B_CLOSE, false);
         btns.add(close);
-        float ccx = close.x + close.w / 2, ccy = close.y + close.h / 2, cr = 6 * dp;
-        g.color(0xFFBBBBBB);
-        g.line(ccx - cr, ccy - cr, ccx + cr, ccy + cr, 2 * dp);
-        g.line(ccx - cr, ccy + cr, ccx + cr, ccy - cr, 2 * dp);
-        // progresso
+        bevel(g, close.x, close.y, close.w, close.h, pressed == B_CLOSE ? METAL_D : 0xFF8A3030, pressed == B_CLOSE);
+        g.color(TXT);
+        for (int i = 0; i < 6; i++) {
+            g.fillRect(close.x + 4 + i, close.y + 3 + i, 1, 1);
+            g.fillRect(close.x + 9 - i, close.y + 3 + i, 1, 1);
+        }
         UnitType cur = panel.making;
-        float py = y + 38 * dp;
-        g.color(0xFF2A2D31);
-        g.fillRoundRect(x + 14 * dp, py, w - 28 * dp, 8 * dp, 4 * dp);
-        g.color(Draw.C_PLAYER);
-        g.fillRoundRect(x + 14 * dp, py, (w - 28 * dp) * Math.min(1, panel.progress), 8 * dp, 4 * dp);
+        float py = y + 17;
+        bevel(g, x + 6, py, w - 12, 6, DARK, true);
+        g.color(ACCENT);
+        g.fillRect(x + 7, py + 1, Math.round((w - 14) * Math.min(1, panel.progress)), 4);
         if (cur != null) {
             float left = (1 - panel.progress) * world.buildSeconds(cur, World.PLAYER);
             boolean cap = world.unitCount(World.PLAYER) >= World.UNIT_CAP;
-            g.color(0xFFCFD3D7);
-            g.text(cap ? "Limite de " + World.UNIT_CAP + " unidades atingido" : "A fabricar " + cur.name + " · faltam " + (int) Math.ceil(left) + " s",
-                x + 14 * dp, py + 18 * dp, 12 * dp, Gfx.LEFT, false);
+            text(g, cap ? "LIMITE DE " + World.UNIT_CAP + " UNIDADES" : "A FABRICAR: " + cur.name.toUpperCase() + " · " + (int) Math.ceil(left) + " S",
+                x + 6, py + 9, TXT, 1, Gfx.LEFT);
         }
-        // escolhas
         UnitType[] types = panel.buildable();
-        float gap = 8 * dp;
-        float bw = (w - 28 * dp - gap * (types.length - 1)) / types.length;
-        float bh = h - (py + 32 * dp - y) - 10 * dp;
+        float gap = 4;
+        float bw = Math.round((w - 12 - gap * (types.length - 1)) / types.length);
+        float by = py + 20, bh = y + h - by - 5;
         for (int i = 0; i < types.length; i++) {
             UnitType t = types[i];
-            Btn b = new Btn(x + 14 * dp + i * (bw + gap), py + 30 * dp, bw, bh, t.name, B_MAKE + i, false);
+            Btn b = new Btn(x + 6 + i * (bw + gap), by, bw, bh, t.name, B_MAKE + i, false);
             btns.add(b);
             boolean on = t == cur;
-            g.color(on ? 0xFF3A2A18 : 0xFF24272B);
-            g.fillRoundRect(b.x, b.y, b.w, b.h, 8 * dp);
-            if (on) {
-                g.color(Draw.C_PLAYER);
-                g.strokeRoundRect(b.x, b.y, b.w, b.h, 8 * dp, 2 * dp);
-            }
+            bevel(g, b.x, b.y, b.w, b.h, on ? 0xFF6A4A1C : (pressed == b.id ? METAL_D : 0xFF3A404C), pressed == b.id || on);
             g.save();
-            g.translate(b.x + 26 * dp, b.y + b.h / 2);
-            float s = 30 * dp / (t.radius * 2.6f);
+            g.translate(b.x + 13, b.y + b.h / 2);
+            float s = 18 / (t.radius * 2.4f);
             g.scale(s);
-            Draw.unitShape(g, t, World.PLAYER, (float) -Math.PI / 2, (float) -Math.PI / 2, clock * 30 * (on ? 1 : 0), false);
+            Draw.unitShape(g, t, World.PLAYER, (float) -Math.PI / 2, (float) -Math.PI / 2, on ? clock * 30 : 0, false);
             g.restore();
-            float tx = b.x + 52 * dp;
-            g.color(0xFFFFFFFF);
-            g.text(t.name, tx, b.y + b.h * 0.3f, 13 * dp, Gfx.LEFT, true);
-            g.color(0xFFAEB4BA);
-            g.text(t.desc, tx, b.y + b.h * 0.55f, 10.5f * dp, Gfx.LEFT, false);
-            g.text((int) Math.ceil(world.buildSeconds(t, World.PLAYER)) + " s", tx, b.y + b.h * 0.78f, 10.5f * dp, Gfx.LEFT, false);
+            float tx = b.x + 26;
+            text(g, t.name.toUpperCase(), tx, b.y + 5, on ? ACCENT_L : TXT, 1, Gfx.LEFT);
+            text(g, t.desc, tx, b.y + 15, DIM, 1, Gfx.LEFT);
+            text(g, (int) Math.ceil(world.buildSeconds(t, World.PLAYER)) + " s", tx, b.y + 25, DIM, 1, Gfx.LEFT);
         }
-    }
-
-    private void drawBtn(Gfx g, Btn b) {
-        g.color(b.primary ? Draw.C_PLAYER : 0xD0202326);
-        g.fillRoundRect(b.x, b.y, b.w, b.h, 8 * dp);
-        g.color(b.primary ? 0xFFFFD2A0 : 0x50FFFFFF);
-        g.strokeRoundRect(b.x, b.y, b.w, b.h, 8 * dp, 1.2f * dp);
-        g.color(b.primary ? 0xFF1A1206 : 0xFFFFFFFF);
-        g.text(b.label, b.x + b.w / 2, b.y + b.h / 2, 15 * dp, Gfx.CENTER, true);
-    }
-
-    private void dim(Gfx g, float a) {
-        g.color(Draw.alpha(0xFF0B0C0E, a));
-        g.fillRect(0, 0, sw, sh);
     }
 
     private void renderTitle(Gfx g) {
-        dim(g, 0.55f);
-        float s = Math.min(sw / 960f, sh / 540f) * 1f;
-        s = Math.max(s, 0.6f * dp);
+        dim(g, 0.45f);
         float cx = sw / 2;
-        float ty = sh * 0.2f;
-        float size = Math.min(64 * dp, sw / 9);
-        g.color(0xFF000000);
-        g.text("SETOR ZERO", cx + 3 * dp, ty + 3 * dp, size, Gfx.CENTER, true);
-        g.color(Draw.C_PLAYER);
-        g.text("SETOR ZERO", cx, ty, size, Gfx.CENTER, true);
-        g.color(0xFFE8E8E8);
-        g.text("Captura bandeiras · domina as fábricas · derruba o forte inimigo", cx, ty + size * 0.75f, 14 * dp, Gfx.CENTER, false);
+        int sc = sw > 560 ? 5 : 4;
+        String title = "SETOR ZERO";
+        float tw = PixelFont.width(title, sc);
+        float tx = Math.round(cx - tw / 2), ty = Math.round(sh * 0.12f);
+        // contorno
+        g.color(SHADOW);
+        for (int dy = -1; dy <= 2; dy++) for (int dx = -1; dx <= 2; dx++) if (dx != 0 || dy != 0) raw(g, title, tx + dx * 1, ty + dy * 1, sc, SHADOW);
+        raw(g, title, tx, ty, sc, 0xFFC05010);
+        g.save();
+        g.clip(tx - 2, ty, tw + 4, PixelFont.CAP * sc * 0.62f);
+        raw(g, title, tx, ty, sc, ACCENT);
+        g.restore();
+        g.save();
+        g.clip(tx - 2, ty, tw + 4, sc * 2);
+        raw(g, title, tx, ty, sc, ACCENT_L);
+        g.restore();
+        text(g, "CAPTURA BANDEIRAS · DOMINA FÁBRICAS · DERRUBA O FORTE", cx, ty + PixelFont.CAP * sc + 8, TXT, 1, Gfx.CENTER);
 
-        float bw = Math.min(150 * dp, (sw - 60 * dp) / 3), bh = 50 * dp, gap = 12 * dp;
-        float total = bw * 3 + gap * 2;
-        float by = sh * 0.52f;
-        g.color(0xFFBFC4C9);
-        g.text("Novo jogo", cx, by - 18 * dp, 13 * dp, Gfx.CENTER, true);
-        int[] ids = {B_EASY, B_NORMAL, B_HARD};
+        float bw = 120, bh = 22, by = Math.round(sh * 0.46f);
+        btn(cx - bw / 2, by, bw, bh, "CAMPANHA", B_CAMPAIGN, true, g);
+        btn(cx - bw / 2, by + bh + 6, bw, bh, "COMO JOGAR", B_HELP, false, g);
+
+        float ow = 74, oh = 16, oy = sh - oh - 6;
+        float ox = sw - (ow + 4) * 3 - 2;
+        btn(ox, oy, ow, oh, soundOn() ? "SOM: SIM" : "SOM: NÃO", B_SOUND, false, g);
+        btn(ox + ow + 4, oy, ow, oh, musicOn() ? "MÚSICA: SIM" : "MÚSICA: NÃO", B_MUSIC, false, g);
+        btn(ox + 2 * (ow + 4), oy, ow, oh, crt() ? "CRT: SIM" : "CRT: NÃO", B_CRT, false, g);
+
+        float bs = Math.min(40, sh * 0.16f);
+        float bx = 8 + bs * 0.6f, byy = sh - bs * 0.6f - 8;
+        bevel(g, bx - bs * 0.62f, byy - bs * 0.62f, bs * 1.24f, bs * 1.24f, DARK, true);
+        Draw.brix(g, bx, byy, bs, clock);
+        float qx = bx + bs * 0.75f;
+        if (qx + 160 < ox) {
+            text(g, "COMANDANTE BRIX", qx, byy - 10, ACCENT_L, 1, Gfx.LEFT);
+            text(g, "\"Mais território, mais fábricas!\"", qx, byy + 2, DIM, 1, Gfx.LEFT);
+        }
+        text(g, "V" + VERSION, sw - 4, 4, DIM, 1, Gfx.RIGHT);
+    }
+
+    private static void raw(Gfx g, String s, float x, float y, int sc, int color) {
+        PixelFont.drawTop(g, s, x, y, sc, color, 0);
+    }
+
+    private void renderLevels(Gfx g) {
+        dim(g, 0.7f);
+        text(g, "CAMPANHA", 8, 7, ACCENT, 2, Gfx.LEFT);
+        float dw = 50, dh = 16;
         for (int i = 0; i < 3; i++) {
-            Btn b = new Btn(cx - total / 2 + i * (bw + gap), by, bw, bh, DIFF[i], ids[i], i == 1);
+            Btn b = new Btn(sw - (dw + 3) * (3 - i) - 4, 5, dw, dh, DIFF[i], B_DIFF + i, i == difficulty);
             btns.add(b);
             drawBtn(g, b);
         }
-        float hw = 150 * dp, hh = 44 * dp;
-        Btn help = new Btn(sw - hw - 16 * dp, sh - hh - 30 * dp, hw, hh, "Como jogar", B_HELP, false);
-        btns.add(help);
-        drawBtn(g, help);
+        int n = Level.ALL.length;
+        int cols = 4, rows = (n + cols - 1) / cols;
+        float top = 28, bottom = sh - 28;
+        float gap = 5;
+        float cw = Math.round((sw - 16 - gap * (cols - 1)) / cols);
+        float ch = Math.round((bottom - top - gap * (rows - 1)) / rows);
+        for (int i = 0; i < n; i++) {
+            final Level L = Level.ALL[i];
+            float x = 8 + (i % cols) * (cw + gap), y = top + (i / cols) * (ch + gap);
+            Btn b = new Btn(x, y, cw, ch, L.name, B_LEVEL + i, false);
+            btns.add(b);
+            bevel(g, x, y, cw, ch, pressed == b.id ? METAL_D : METAL, pressed == b.id);
+            float ph = ch - 14, pw = Math.min(cw - 6, ph * L.W / L.H);
+            ph = pw * L.H / L.W;
+            float px = Math.round(x + (cw - pw) / 2), py = y + 3;
+            g.image("prev-" + i, L.W * 2, L.H * 2, new Gfx.PixelSource() {
+                public int[] pixels() { return preview(L); }
+            }, px, py, Math.round(pw), Math.round(ph));
+            g.color(SHADOW);
+            g.strokeRect(px - 0.5f, py - 0.5f, Math.round(pw) + 1, Math.round(ph) + 1, 1);
+            String name = (i + 1) + ". " + L.name.toUpperCase();
+            while (PixelFont.width(name) > cw - 6 && name.length() > 4) name = name.substring(0, name.length() - 2) + ".";
+            text(g, name, x + 3, y + ch - 10, TXT, 1, Gfx.LEFT);
+            int done = store.get("lvl" + i, 0);
+            for (int k = 0; k < done; k++) {
+                g.color(SHADOW); star(g, x + cw - 9 - k * 8 + 1, py + 3);
+                g.color(ACCENT_L); star(g, x + cw - 9 - k * 8, py + 2);
+            }
+        }
+        btn(8, sh - 22, 70, 17, "VOLTAR", B_BACK, false, g);
+        text(g, "TOCA NUM NÍVEL PARA JOGAR · ESTRELAS: DIFICULDADE VENCIDA", sw - 8, sh - 17, DIM, 1, Gfx.RIGHT);
+    }
 
-        // Comandante Brix
-        float bs = Math.min(90 * dp, sh * 0.18f);
-        float bx = 24 * dp + bs * 0.6f, byy = sh - bs * 0.75f - 14 * dp;
-        Draw.brix(g, bx, byy, bs, clock);
-        g.color(0xFFFFFFFF);
-        g.text("Comandante Brix", bx + bs * 0.7f, byy - bs * 0.15f, 13 * dp, Gfx.LEFT, true);
-        g.color(0xFFBFC4C9);
-        g.text("\"Mais território, mais fábricas a trabalhar. Avançar!\"", bx + bs * 0.7f, byy + bs * 0.12f, 12 * dp, Gfx.LEFT, false);
-        g.color(0x80FFFFFF);
-        g.text("v" + VERSION, sw - 16 * dp, sh - 14 * dp, 11 * dp, Gfx.RIGHT, false);
+    private static void star(Gfx g, float x, float y) {
+        g.fillRect(x + 2, y, 1, 1);
+        g.fillRect(x + 1, y + 1, 3, 1);
+        g.fillRect(x, y + 2, 5, 1);
+        g.fillRect(x + 1, y + 3, 3, 1);
+        g.fillRect(x, y + 4, 2, 1);
+        g.fillRect(x + 3, y + 4, 2, 1);
+    }
+
+    /** Pequena pré-visualização do mapa (2 píxeis por quadrícula). */
+    static int[] preview(Level L) {
+        World w = new World(1, 1, L);
+        int[] pal = TerrainArt.PAL[L.theme];
+        int PW = w.W * 2, PH = w.H * 2;
+        int[] out = new int[PW * PH];
+        for (int y = 0; y < PH; y++)
+            for (int x = 0; x < PW; x++) {
+                int t = w.tileAt(x / 2, y / 2);
+                int c;
+                switch (t) {
+                    case World.ROCK: c = pal[TerrainArt.R0]; break;
+                    case World.WATER: c = pal[TerrainArt.W1]; break;
+                    case World.TREE: c = pal[TerrainArt.T1]; break;
+                    case World.DIRT: c = pal[TerrainArt.D0]; break;
+                    case World.BRIDGE: c = pal[TerrainArt.B0]; break;
+                    default: c = pal[((x + y) & 1) == 0 ? TerrainArt.G0 : TerrainArt.G1];
+                }
+                out[y * PW + x] = c;
+            }
+        for (Building b : w.buildings)
+            for (int y = b.ty * 2; y < (b.ty + b.th) * 2; y++)
+                for (int x = b.tx * 2; x < (b.tx + b.tw) * 2; x++)
+                    out[y * PW + x] = b.team == World.NEUTRAL ? 0xFFE0E0E0 : Draw.teamColor(b.team);
+        for (Sector s : w.sectors) {
+            int fx = (int) (s.fx / T * 2), fy = (int) (s.fy / T * 2);
+            for (int y = fy - 1; y <= fy; y++) for (int x = fx - 1; x <= fx; x++) out[y * PW + x] = 0xFFFFFFFF;
+        }
+        return out;
     }
 
     private void renderHelp(Gfx g) {
-        dim(g, 0.78f);
+        dim(g, 0.82f);
         String[] lines = {
-            "OBJETIVO",
-            "Destrói o forte ciano (canto superior direito) antes que destruam o teu.",
-            "",
-            "SETORES E BANDEIRAS",
-            "O mapa tem 9 setores. Basta uma unidade tocar na bandeira para o setor ser teu,",
-            "com as fábricas e os canhões que lá estão. Quantos mais setores, mais rápido fabricas.",
-            "A bandeira de cada base só pode ser tomada depois de o forte dessa base cair.",
-            "",
-            "CONTROLOS",
-            "Arrastar um dedo: caixa de seleção · Tocar numa unidade: selecionar (2 toques: todas do mesmo tipo)",
-            "Tocar no chão: mover · Tocar num inimigo: atacar · Tocar num veículo abandonado: ocupá-lo",
-            "Tocar numa fábrica tua: escolher o que fabrica · Dois dedos: mover e aproximar a câmara",
-            "",
-            "UNIDADES",
-            "Batedor: rápido e barato · Atirador: alcance longo contra robôs · Bazuca: contra veículos e edifícios",
-            "Jipe: muito rápido · Tanque: lento mas muito resistente",
+            "#OBJETIVO",
+            "Destrói o forte ciano antes que destruam o teu.",
+            "#SETORES E BANDEIRAS",
+            "Uma unidade na bandeira captura o setor, com fábricas e canhões.",
+            "Mais setores = fábricas mais rápidas. A bandeira de uma base",
+            "só pode ser tomada depois de o forte dessa base cair.",
+            "#CONTROLOS",
+            "Arrastar: selecionar · Tocar na unidade: selecionar (2x: tipo)",
+            "Tocar no chão: mover · Tocar no inimigo: atacar",
+            "Tocar num veículo abandonado: ocupar · Na fábrica: produção",
+            "Dois dedos: mover a câmara e zoom · Minimapa: saltar",
+            "#UNIDADES",
+            "Batedor: barato · Atirador: alcance longo contra robôs",
+            "Bazuca: contra veículos e edifícios · Jipe: rápido · Tanque: forte",
         };
-        float size = Math.min(13 * dp, sw / 70);
-        float lh = size * 1.55f;
-        float y = Math.max(20 * dp, (sh - lines.length * lh - 70 * dp) / 2);
+        float lh = 11;
+        float total = 0;
+        for (String l : lines) total += l.startsWith("#") ? lh + 4 : lh;
+        float y = Math.max(6, (sh - total - 28) / 2);
         for (String l : lines) {
-            boolean head = l.equals(l.toUpperCase()) && l.length() > 0;
-            g.color(head ? Draw.C_PLAYER : 0xFFE8E8E8);
-            g.text(l, sw / 2, y, head ? size * 1.1f : size, Gfx.CENTER, head);
+            boolean head = l.startsWith("#");
+            if (head) y += 4;
+            text(g, head ? l.substring(1) : l, sw / 2, y, head ? ACCENT : TXT, 1, Gfx.CENTER);
             y += lh;
         }
-        Btn back = new Btn(sw / 2 - 75 * dp, Math.min(y + 10 * dp, sh - 58 * dp), 150 * dp, 46 * dp, "Voltar", B_BACK, true);
-        btns.add(back);
-        drawBtn(g, back);
+        btn(sw / 2 - 40, Math.min(y + 6, sh - 24), 80, 18, "VOLTAR", B_BACK, true, g);
     }
 
     private void renderPause(Gfx g) {
         btns.clear();
-        dim(g, 0.65f);
-        g.color(0xFFFFFFFF);
-        g.text("Pausa", sw / 2, sh * 0.25f, 36 * dp, Gfx.CENTER, true);
-        g.color(0xFFBFC4C9);
-        g.text("Dificuldade: " + DIFF[difficulty], sw / 2, sh * 0.25f + 32 * dp, 13 * dp, Gfx.CENTER, false);
-        float bw = 210 * dp, bh = 46 * dp, gap = 10 * dp, y = sh * 0.42f;
-        Btn[] bs = {
-            new Btn(sw / 2 - bw / 2, y, bw, bh, "Continuar", B_RESUME, true),
-            new Btn(sw / 2 - bw / 2, y + bh + gap, bw, bh, "Recomeçar", B_RESTART, false),
-            new Btn(sw / 2 - bw / 2, y + 2 * (bh + gap), bw, bh, "Sair para o menu", B_MENU, false),
-        };
-        for (Btn b : bs) { btns.add(b); drawBtn(g, b); }
+        dim(g, 0.55f);
+        float w = 160, h = 112, x = Math.round((sw - w) / 2), y = Math.round((sh - h) / 2);
+        bevel(g, x, y, w, h, METAL, false);
+        rivets(g, x, y, w, h);
+        text(g, "PAUSA", sw / 2, y + 7, ACCENT, 2, Gfx.CENTER);
+        text(g, Level.ALL[levelIdx].name.toUpperCase() + " · " + DIFF[difficulty], sw / 2, y + 25, DIM, 1, Gfx.CENTER);
+        float bw = 130, bh = 18;
+        btn(sw / 2 - bw / 2, y + 38, bw, bh, "CONTINUAR", B_RESUME, true, g);
+        btn(sw / 2 - bw / 2, y + 60, bw, bh, "RECOMEÇAR", B_RESTART, false, g);
+        btn(sw / 2 - bw / 2, y + 82, bw, bh, "NÍVEIS", B_LEVELS, false, g);
     }
 
     private void renderEnd(Gfx g) {
         btns.clear();
-        dim(g, 0.6f);
+        dim(g, 0.5f);
         boolean win = world.winner == World.PLAYER;
-        g.color(win ? Draw.C_PLAYER : 0xFFFF6A5A);
-        g.text(win ? "VITÓRIA" : "DERROTA", sw / 2, sh * 0.2f, 48 * dp, Gfx.CENTER, true);
+        float w = Math.min(sw - 20, 300), h = 130, x = Math.round((sw - w) / 2), y = Math.round((sh - h) / 2);
+        bevel(g, x, y, w, h, METAL, false);
+        rivets(g, x, y, w, h);
+        text(g, win ? "VITÓRIA!" : "DERROTA", sw / 2, y + 8, win ? ACCENT_L : BAD, 3, Gfx.CENTER);
         int secs = (int) world.time;
         String[] st = {
-            "Duração: " + secs / 60 + " min " + secs % 60 + " s · Dificuldade: " + DIFF[difficulty],
-            "Unidades fabricadas: " + world.produced[1] + "  ·  Perdidas: " + world.lost[1] + "  ·  Abatidas: " + world.kills[1],
-            "Bandeiras capturadas: " + world.captures[1] + "  ·  Setores no fim: " + world.ownedSectors(1) + " de 9",
+            Level.ALL[levelIdx].name.toUpperCase() + " · " + DIFF[difficulty] + " · " + secs / 60 + " MIN " + secs % 60 + " S",
+            "FABRICADAS " + world.produced[1] + " · PERDIDAS " + world.lost[1] + " · ABATIDAS " + world.kills[1],
+            "BANDEIRAS " + world.captures[1] + " · SETORES NO FIM " + world.ownedSectors(1) + " DE " + world.sectors.length,
         };
-        float y = sh * 0.2f + 46 * dp;
-        for (String s : st) {
-            g.color(0xFFE8E8E8);
-            g.text(s, sw / 2, y, 14 * dp, Gfx.CENTER, false);
-            y += 24 * dp;
-        }
-        float bw = 190 * dp, bh = 46 * dp, gap = 12 * dp;
-        float by = Math.min(y + 20 * dp, sh - bh - 16 * dp);
-        Btn again = new Btn(sw / 2 - bw - gap / 2, by, bw, bh, "Jogar de novo", B_AGAIN, true);
-        Btn menu = new Btn(sw / 2 + gap / 2, by, bw, bh, "Menu", B_MENU, false);
-        btns.add(again);
-        btns.add(menu);
-        drawBtn(g, again);
-        drawBtn(g, menu);
+        float ty = y + 38;
+        for (String s : st) { text(g, s, sw / 2, ty, TXT, 1, Gfx.CENTER); ty += 12; }
+        float bw = Math.round((w - 24) / 3), bh = 20, by = y + h - bh - 8;
+        boolean hasNext = win && levelIdx + 1 < Level.ALL.length;
+        int nb = hasNext ? 3 : 2;
+        float bx = Math.round(sw / 2 - (nb * bw + (nb - 1) * 4) / 2);
+        if (hasNext) btn(bx, by, bw, bh, "SEGUINTE", B_NEXT, true, g);
+        btn(bx + (bw + 4) * (hasNext ? 1 : 0), by, bw, bh, "REPETIR", B_RESTART, !hasNext, g);
+        btn(bx + (bw + 4) * (hasNext ? 2 : 1), by, bw, bh, "NÍVEIS", B_LEVELS, false, g);
     }
 }

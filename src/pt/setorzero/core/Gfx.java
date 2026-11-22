@@ -4,7 +4,8 @@ package pt.setorzero.core;
 public interface Gfx {
     int LEFT = 0, CENTER = 1, RIGHT = 2;
 
-    interface Painter { void paint(Gfx g); }
+    /** Fornece os píxeis (ARGB) de uma imagem, só chamado na primeira vez que a imagem é usada. */
+    interface PixelSource { int[] pixels(); }
 
     void color(int argb);
     void fillRect(float x, float y, float w, float h);
@@ -18,15 +19,12 @@ public interface Gfx {
     void line(float x1, float y1, float x2, float y2, float width);
     /** Polígono preenchido: pts = x0, y0, x1, y1, ... */
     void fillPoly(float[] pts, int n);
-    /** Texto com y no centro vertical. */
-    void text(String s, float x, float y, float size, int align, boolean bold);
-    float textWidth(String s, float size, boolean bold);
     void save();
     void restore();
     void translate(float x, float y);
     void rotate(float rad);
     void scale(float s);
     void clip(float x, float y, float w, float h);
-    /** Desenha (e guarda em memória na primeira vez) uma camada estática de w×h unidades. */
-    void cached(String key, int w, int h, float scale, boolean opaque, Painter p, float dx, float dy, float dw, float dh);
+    /** Desenha uma imagem w×h (guardada em memória pela chave) no retângulo dado, sem suavizar os píxeis. */
+    void image(String key, int w, int h, PixelSource src, float dx, float dy, float dw, float dh);
 }

@@ -3,8 +3,6 @@ package pt.setorzero.core;
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.Font;
-import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.Shape;
@@ -27,9 +25,8 @@ public final class DesktopGfx implements Gfx {
 
     public DesktopGfx(Graphics2D g) {
         this.g = g;
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
     }
 
     public void color(int argb) { g.setColor(new Color(argb, true)); }
@@ -53,22 +50,6 @@ public final class DesktopGfx implements Gfx {
         g.fill(p);
     }
 
-    private Font font(float size, boolean bold) { return new Font(Font.SANS_SERIF, bold ? Font.BOLD : Font.PLAIN, 1).deriveFont(size); }
-
-    public void text(String s, float x, float y, float size, int align, boolean bold) {
-        Font f = font(size, bold);
-        g.setFont(f);
-        FontMetrics fm = g.getFontMetrics();
-        float w = fm.stringWidth(s);
-        float dx = align == CENTER ? -w / 2 : align == RIGHT ? -w : 0;
-        g.drawString(s, x + dx, y + (fm.getAscent() - fm.getDescent()) / 2f);
-    }
-
-    public float textWidth(String s, float size, boolean bold) {
-        g.setFont(font(size, bold));
-        return g.getFontMetrics().stringWidth(s);
-    }
-
     public void save() { stack.push(g.getTransform()); clips.push(g.getClip() == null ? new Rectangle2D.Float(-1e6f, -1e6f, 2e6f, 2e6f) : g.getClip()); }
     public void restore() { g.setTransform(stack.pop()); g.setClip(clips.pop()); }
     public void translate(float x, float y) { g.translate(x, y); }
@@ -76,14 +57,11 @@ public final class DesktopGfx implements Gfx {
     public void scale(float s) { g.scale(s, s); }
     public void clip(float x, float y, float w, float h) { g.clip(new Rectangle2D.Float(x, y, w, h)); }
 
-    public void cached(String key, int w, int h, float scale, boolean opaque, Painter p, float dx, float dy, float dw, float dh) {
+    public void image(String key, int w, int h, PixelSource src, float dx, float dy, float dw, float dh) {
         BufferedImage img = CACHE.get(key);
         if (img == null) {
-            img = new BufferedImage((int) Math.ceil(w * scale), (int) Math.ceil(h * scale), opaque ? BufferedImage.TYPE_INT_RGB : BufferedImage.TYPE_INT_ARGB);
-            Graphics2D ig = img.createGraphics();
-            ig.scale(scale, scale);
-            p.paint(new DesktopGfx(ig));
-            ig.dispose();
+            img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+            img.setRGB(0, 0, w, h, src.pixels(), 0, w);
             CACHE.put(key, img);
         }
         AffineTransform at = g.getTransform();

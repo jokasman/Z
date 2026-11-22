@@ -8,8 +8,21 @@ public final class SoundSynth {
 
     private SoundSynth() { }
 
-    public static byte[] wav(int id) {
-        float[] s = samples(id);
+    public static byte[] wav(int id) { return wav(crunch(samples(id))); }
+
+    /** Música de fundo em WAV (repete-se em ciclo). */
+    public static byte[] musicWav(int track) { return wav(track == Sfx.MUSIC_MENU ? menuTrack() : battleTrack()); }
+
+    /** Som de 8 bits: metade da taxa de amostragem e 6 bits de resolução. */
+    static float[] crunch(float[] s) {
+        for (int i = 0; i < s.length; i++) {
+            float v = (i & 1) == 0 ? s[i] : s[i - 1];
+            s[i] = Math.round(v * 32) / 32f;
+        }
+        return s;
+    }
+
+    static byte[] wav(float[] s) {
         int n = s.length;
         byte[] out = new byte[44 + n * 2];
         put(out, 0, "RIFF");
@@ -130,6 +143,115 @@ public final class SoundSynth {
             s[i] = (float) (Math.sin(ph) > 0 ? 0.25 : -0.25) * env;
         }
         return s;
+    }
+
+    // ---------------------------------------------------------------- música chiptune
+
+    private static float midi(int n) { return 440f * (float) Math.pow(2, (n - 69) / 12.0); }
+
+    private static float square(double ph, float duty) { return (ph - Math.floor(ph)) < duty ? 1f : -1f; }
+
+    private static float tri(double ph) {
+        double f = ph - Math.floor(ph);
+        return (float) (f < 0.5 ? f * 4 - 1 : 3 - f * 4);
+    }
+
+    /** Escreve uma nota quadrada/triangular no buffer. */
+    private static void note(float[] buf, int start, int len, float freq, float vol, int wave, float decay) {
+        double ph = 0, inc = freq / RATE;
+        for (int i = 0; i < len && start + i < buf.length; i++) {
+            float t = (float) i / RATE;
+            float env = Math.min(1, t / 0.004f) * (float) Math.exp(-t / decay) * Math.min(1, (len - i) / 120f);
+            float v = wave == 0 ? square(ph, 0.25f) : wave == 1 ? tri(ph) : square(ph, 0.5f);
+            buf[start + i] += v * env * vol;
+            ph += inc;
+        }
+    }
+
+    private static void drum(float[] buf, int start, int kind, Random r) {
+        int len = kind == 0 ? RATE / 6 : kind == 1 ? RATE / 8 : RATE / 30;
+        float lp = 0;
+        for (int i = 0; i < len && start + i < buf.length; i++) {
+            float t = (float) i / RATE;
+            float v;
+            if (kind == 0) v = (float) Math.sin(6.283 * (110 - 300 * t) * t) * (float) Math.exp(-t / 0.06f) * 0.55f;
+            else {
+                float n = r.nextFloat() * 2 - 1;
+                lp += 0.6f * (n - lp);
+                v = (kind == 1 ? lp * 0.35f : (n - lp) * 0.18f) * (float) Math.exp(-t / (kind == 1 ? 0.05f : 0.012f));
+            }
+            buf[start + i] += v;
+        }
+    }
+
+    private static float[] render(int bpm, int[] roots, boolean[] minor, int[][] melody, int bassMode, boolean drums, int repeats) {
+        int step = (int) (RATE * 60f / bpm / 4); // semicolcheia
+        int bars = roots.length;
+        float[] buf = new float[step * 16 * bars * repeats];
+        Random r = new Random(5);
+        for (int rep = 0; rep < repeats; rep++) {
+            for (int bar = 0; bar < bars; bar++) {
+                int base = (rep * bars + bar) * 16 * step;
+                int root = roots[bar];
+                int[] chord = minor[bar] ? new int[]{0, 3, 7, 12, 15} : new int[]{0, 4, 7, 12, 16};
+                // baixo
+                for (int s = 0; s < 16; s += bassMode == 0 ? 2 : 4) {
+                    int n = root - 12 + ((s / 2) % 2 == 1 && bassMode == 0 ? 12 : 0);
+                    note(buf, base + s * step, step * (bassMode == 0 ? 2 : 4) - 40, midi(n), 0.32f, 1, 0.5f);
+                }
+                // melodia
+                int[] mel = melody[(bar + rep) % melody.length];
+                for (int s = 0; s < 16; s++) {
+                    int k = mel[s];
+                    if (k < 0) continue;
+                    int len = 1;
+                    while (s + len < 16 && mel[s + len] == -2) len++;
+                    note(buf, base + s * step, step * len - 30, midi(root + 12 + chord[k % 5] + (k >= 5 ? 12 : 0)), 0.14f, 0, 0.12f * len + 0.05f);
+                }
+                // arpejo suave
+                for (int s = 0; s < 16; s++) {
+                    if (bassMode == 1 || s % 2 == 0) note(buf, base + s * step, step - 20, midi(root + 12 + chord[(s / (bassMode == 1 ? 1 : 2)) % 4]), bassMode == 1 ? 0.07f : 0.05f, 2, 0.06f);
+                }
+                if (drums) {
+                    for (int s = 0; s < 16; s++) {
+                        if (s % 8 == 0 || (s == 10 && bar % 2 == 1)) drum(buf, base + s * step, 0, r);
+                        if (s % 8 == 4) drum(buf, base + s * step, 1, r);
+                        if (s % 2 == 0) drum(buf, base + s * step, 2, r);
+                    }
+                }
+            }
+        }
+        float peak = 0;
+        for (float v : buf) peak = Math.max(peak, Math.abs(v));
+        float g = peak > 0 ? 0.8f / peak : 1;
+        for (int i = 0; i < buf.length; i++) buf[i] *= g;
+        return crunch(buf);
+    }
+
+    static float[] battleTrack() {
+        int[] roots = {57, 57, 53, 53, 48, 48, 55, 52};
+        boolean[] minor = {true, true, false, false, false, false, false, false};
+        int O = -1, H = -2;
+        int[][] mel = {
+            {0, H, 2, H, 1, O, 2, 3, O, 2, H, 1, 0, H, O, O},
+            {3, H, 2, 1, 2, H, 0, O, 1, H, 2, H, 4, H, 3, O},
+            {2, O, 2, 3, 4, H, 3, 2, 1, H, 0, O, 1, 2, H, O},
+            {0, H, H, O, 1, 2, 3, H, 2, 1, 0, H, 1, H, H, O},
+        };
+        return render(132, roots, minor, mel, 0, true, 2);
+    }
+
+    static float[] menuTrack() {
+        int[] roots = {50, 50, 46, 46, 53, 53, 48, 52};
+        boolean[] minor = {true, true, false, false, false, false, false, false};
+        int O = -1, H = -2;
+        int[][] mel = {
+            {2, H, H, H, H, H, 1, H, 0, H, H, H, O, O, O, O},
+            {3, H, H, H, 2, H, H, H, 1, H, 2, H, H, H, O, O},
+            {4, H, H, H, 3, H, 2, H, 3, H, H, H, H, H, O, O},
+            {2, H, 1, H, 0, H, H, H, H, H, H, H, O, O, O, O},
+        };
+        return render(92, roots, minor, mel, 1, false, 2);
     }
 
     private static void put(byte[] b, int o, String s) {
